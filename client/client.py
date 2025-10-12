@@ -14,7 +14,7 @@ logging.basicConfig(
 )
 
 class ClientNode():
-    def __init__(self, server_host='server_srcp', server_port=8080) -> None:
+    def __init__(self, server_host='mi-scrp-server', server_port=8080) -> None:
         self.server_host = server_host
         self.server_port = server_port
         self.client_id = None
@@ -154,7 +154,7 @@ class ClientNode():
 
 if __name__ == "__main__":
     # el server se reconoce por nombre en docker
-    client = ClientNode(server_host='server_scrp')
+    client = ClientNode(server_host='mi-scrp-server')
 
     # intenta reconectar si se pierde la conexion
     while(True):
