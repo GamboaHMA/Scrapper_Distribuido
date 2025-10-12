@@ -21,6 +21,7 @@ class ClientNode():
         self.connected = False
         self.socket = None
         self.current_task = {}
+        self.send_lock = threading.Lock()
 
     def connect_to_server(self):
         '''conecta al servidor central'''
@@ -50,7 +51,13 @@ class ClientNode():
                     'type': 'heartbeat',
                     'time_now': datetime.now().isoformat()
                 }
-                self.socket.send(json.dumps(heartbeat_msg).encode())
+                message = json.dumps(heartbeat_msg).encode()
+
+                with self.send_lock:
+                    lenght = len(message)
+                    self.socket.send(lenght.to_bytes(4, 'big'))
+                    self.socket.send(message)
+
                 time.sleep(5) # latido cada 5 segundos
             
             except Exception:
@@ -64,7 +71,11 @@ class ClientNode():
                 'status': status,
                 'time_now': datetime.now().isoformat()
             }
-            self.socket.send(json.dumps(status_msg).encode())
+            message = json.dumps(status_msg).encode()
+            with self.send_lock:
+                lenght = len(message)
+                self.socket.send(lenght.to_bytes(4, 'big'))
+                self.socket.send(message)
         
         except Exception:
             self.connected = False
