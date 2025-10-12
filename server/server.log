@@ -9,3 +9,8 @@
 2025-10-12 18:42:57,464 - INFO - [CONNECTION] Client 127.0.0.1:46646: Cliente conectado
 2025-10-12 18:42:57,465 - INFO - [STATUS] Client 127.0.0.1:46646: Estado: Conectado y listo
 2025-10-12 18:48:43,130 - INFO - [SERVER_STOP] Servidor detenido
+2025-10-12 19:19:09,821 - INFO - [SERVER_START] Servidor iniciado en 0.0.0.0:8080
+2025-10-12 19:19:13,735 - INFO - [CONNECTION] Client 127.0.0.1:34218: Cliente conectado
+2025-10-12 19:19:13,736 - INFO - [STATUS] Client 127.0.0.1:34218: Estado: Conectado y listo
+2025-10-12 19:19:52,394 - INFO - [DISCONNECTION] Client 127.0.0.1:34218: Cliente desconectado
+2025-10-12 19:19:53,744 - INFO - [SERVER_STOP] Servidor detenido

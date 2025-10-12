@@ -7,7 +7,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copiar el código de la aplicación
-COPY client.py .
+COPY client.py scrapper.py ./
 
 # Definir variables de entorno
 ENV PYTHONUNBUFFERED=1
