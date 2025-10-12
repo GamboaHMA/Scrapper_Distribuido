@@ -23,6 +23,26 @@ class CentralServer():
         self.task_id_counter = 1
         self.log_entries = []
     
+    def receive_messages(self, client_socket):
+        # recibe longitud primero
+        lenght_bytes = client_socket.recv(4)
+        if not lenght_bytes:
+            return False
+
+        lenght =  int.from_bytes(lenght_bytes, 'big')
+        # recibe mensaje completo
+        data = b""
+        while(len(data) < lenght):
+            chunk = client_socket.recv(min(1024, lenght - len(data)))
+            if not chunk:
+                break
+            data += chunk
+                
+        if len(data) == lenght:
+            message = json.loads(data.decode())
+            return message
+            
+
     def log_event(self, event_type, message, client_id=None):
         '''Registrar eventos'''
         time_now = datetime.now().isoformat()
@@ -59,12 +79,11 @@ class CentralServer():
 
             while(True):
                 # recibe datos eviados por cliente
-                data:str = client_socket.recv(1024).decode()
-                if not data:
+                message = self.receive_messages(client_socket)
+                if not message:
                     break
 
                 try:
-                    message = json.loads(data)
                     self.process_client_message(client_id, message)
                 
                 except json.JSONDecodeError:

@@ -8,3 +8,11 @@
 2025-10-12 15:26:13,358 - INFO - [ERROR] Client 127.0.0.1:51430: Error en comunicacion :'list' object has no attribute 'get'
 2025-10-12 15:26:20,628 - INFO - [DISCONNECTION] Client 127.0.0.1:51430: Cliente desconectado
 2025-10-12 15:26:37,541 - INFO - [CONNECTION] Client 127.0.0.1:51432: Cliente conectado
+2025-10-12 18:35:28,129 - INFO - [SERVER_START] Servidor iniciado en 0.0.0.0:8080
+2025-10-12 18:36:01,554 - INFO - [CONNECTION] Client 127.0.0.1:51436: Cliente conectado
+2025-10-12 18:38:11,654 - INFO - [SERVER_START] Servidor iniciado en 0.0.0.0:8080
+2025-10-12 18:38:17,680 - INFO - [CONNECTION] Client 127.0.0.1:51444: Cliente conectado
+2025-10-12 18:43:32,093 - INFO - [STATUS] Client 127.0.0.1:51444: Estado: Conectado y listo
+2025-10-12 18:43:47,969 - INFO - [SERVER_START] Servidor iniciado en 0.0.0.0:8080
+2025-10-12 18:43:53,141 - INFO - [CONNECTION] Client 127.0.0.1:51446: Cliente conectado
+2025-10-12 18:44:45,375 - INFO - [STATUS] Client 127.0.0.1:51446: Estado: Conectado y listo
