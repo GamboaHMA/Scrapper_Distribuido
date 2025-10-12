@@ -1,22 +1,16 @@
+"""
+Módulo para manejar el scraping de páginas web respetando robots.txt y límites de velocidad.
+"""
+
 import time
 import logging
 import urllib.parse
 from urllib.robotparser import RobotFileParser
 import re
-from bs4 import BeautifulSoup
 import requests
-import json
-from flask import Flask, request, jsonify
+from bs4 import BeautifulSoup
 
-# Configuración de logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
-
-app = Flask(__name__)
-
-# Configuración global
+# Configuración global para scraping
 HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
@@ -171,11 +165,13 @@ def get_html_from_url(url):
             }
         
         except requests.exceptions.HTTPError as e:
-            if response.status_code in [403, 404, 410]:
+            response_code = getattr(e.response, 'status_code', None)
+            if response_code in [403, 404, 410]:
                 # No reintentar para estos códigos
-                raise Exception(f"URL no accesible (Código {response.status_code}): {url}")
+                raise Exception(f"URL no accesible (Código {response_code}): {url}")
             else:
-                logging.warning(f"Error HTTP {response.status_code} al descargar {url}, intento {attempt+1}/{MAX_RETRIES}")
+                status_code = response_code if response_code else "desconocido"
+                logging.warning(f"Error HTTP {status_code} al descargar {url}, intento {attempt+1}/{MAX_RETRIES}")
                 
         except requests.exceptions.RequestException as e:
             logging.warning(f"Error al descargar URL: {url}, intento {attempt+1}/{MAX_RETRIES}. Error: {str(e)}")
@@ -190,28 +186,3 @@ def get_html_from_url(url):
             time.sleep(wait_time)
     
     raise Exception(f"No se pudo descargar la URL después de {MAX_RETRIES} intentos: {url}")
-
-@app.route('/scrape', methods=['POST'])
-def scrape():
-    """Endpoint para recibir peticiones de scraping"""
-    data = request.get_json()
-    
-    if not data or 'url' not in data:
-        return jsonify({'error': 'URL no proporcionada'}), 400
-    
-    url = data['url']
-    
-    try:
-        result = get_html_from_url(url)
-        return jsonify(result)
-    except Exception as e:
-        return jsonify({'error': str(e)}), 400
-
-@app.route('/health', methods=['GET'])
-def health():
-    """Endpoint para verificar la salud del servicio"""
-    return jsonify({'status': 'OK'})
-
-if __name__ == "__main__":
-    logging.info("Iniciando servicio de scraping...")
-    app.run(host='0.0.0.0', port=5000)
