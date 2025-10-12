@@ -47,7 +47,7 @@ class CentralServer():
                 'connected_at': datetime.now().isoformat(),
                 'status': 'connected'
             }
-            self.log_event('CONNECTION', f"Cliente conectado", client_id)
+            self.log_event('CONNECTION', "Cliente conectado", client_id)
 
             # envia ID al cliente 
             welcome_msg = {
