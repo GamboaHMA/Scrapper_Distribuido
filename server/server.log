@@ -1,0 +1,7 @@
+2025-10-12 19:29:13,008 - INFO - [SERVER_STOP] Servidor detenido
+2025-10-12 15:29:33,896 - INFO - [SERVER_START] Servidor iniciado en 0.0.0.0:8080
+2025-10-12 15:30:13,725 - INFO - [SERVER_STOP] Servidor detenido
+2025-10-12 15:30:39,358 - INFO - [SERVER_START] Servidor iniciado en 0.0.0.0:8080
+2025-10-12 15:30:58,161 - INFO - [CONNECTION] Client 127.0.0.1:51434: Cliente conectado
+2025-10-12 15:32:10,996 - INFO - [ERROR] Client 127.0.0.1:51434: Error en comunicacion :'list' object has no attribute 'get'
+2025-10-12 15:32:10,997 - INFO - [DISCONNECTION] Client 127.0.0.1:51434: Cliente desconectado
