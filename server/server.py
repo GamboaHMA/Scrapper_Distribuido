@@ -229,6 +229,7 @@ class CentralServer():
         help_text = '''Comandos disponibles: 
         - "status": estado actual del sistema
         - "clients": lista de clientes conectados
+        - "client IP": info sobre el cliente 
         - "exit": cerrar servidor
         - "help": mostrar esta ayuda\n
         '''

@@ -160,3 +160,16 @@
 2025-10-13 04:45:08,869 - INFO - [PING] Client 127.0.0.1:32874: Recibiendo ping
 2025-10-13 04:45:30,184 - INFO - [PING] Client 127.0.0.1:32874: Recibiendo ping
 2025-10-13 04:45:47,025 - INFO - [SERVER_STOP] Servidor detenido
+2025-10-13 04:51:39,578 - INFO - [SERVER_START] Servidor iniciado en 0.0.0.0:8080
+2025-10-13 04:51:46,503 - INFO - [CONNECTION] Client 127.0.0.1:32922: Cliente conectado
+2025-10-13 04:51:46,505 - INFO - [PING] Client 127.0.0.1:32922: Recibiendo ping
+2025-10-13 04:51:46,506 - INFO - [STATUS] Client 127.0.0.1:32922: Estado: Conectado y listo
+2025-10-13 04:52:09,849 - INFO - [TASK_ASSIGNED] Client 127.0.0.1:32922: Tarea 1 asignada: {'url': 'https://www.python.org/'}
+2025-10-13 04:52:10,857 - INFO - [TAKE_RESULT] Client 127.0.0.1:32922: Tarea 1 completada: {'url': 'https://www.python.org/', 'html_length': 50142, 'links_count': 200, 'links': ['https://www.python.org/#content', 'https://www.python.org/#python-network', 'https://www.python.org/', 'https://www.python.org/psf/', 'https://docs.python.org', 'https://pypi.org/', 'https://www.python.org/jobs/', 'https://www.python.org/community/', 'https://www.python.org/#top', 'https://www.python.org/'], 'status': 'success'}
+2025-10-13 04:52:57,111 - INFO - [DISCONNECTION] Client 127.0.0.1:32922: Cliente desconectado
+2025-10-13 04:53:06,519 - INFO - [CONNECTION] Client 127.0.0.1:32924: Cliente conectado
+2025-10-13 04:53:06,520 - INFO - [PING] Client 127.0.0.1:32924: Recibiendo ping
+2025-10-13 04:53:06,520 - INFO - [STATUS] Client 127.0.0.1:32924: Estado: Conectado y listo
+2025-10-13 04:54:06,581 - INFO - [PING] Client 127.0.0.1:32924: Recibiendo ping
+2025-10-13 04:55:06,616 - INFO - [PING] Client 127.0.0.1:32924: Recibiendo ping
+2025-10-13 04:55:12,157 - INFO - [SERVER_STOP] Servidor detenido
