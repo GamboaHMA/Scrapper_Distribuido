@@ -131,6 +131,12 @@ class ClientNode():
 
         try:
             self.socket.send(json.dumps(result_msg).encode())
+            message = json.dumps(result_msg).encode()
+            with self.send_lock:
+                lenght = len(message)
+                self.socket.send(lenght.to_bytes(4, 'big'))
+                self.socket.send(message)
+
             logging.info(f"Tarea {task_id} completada y enviada al servidor")
         
         except Exception as e:

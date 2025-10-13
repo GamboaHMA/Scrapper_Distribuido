@@ -14,3 +14,44 @@
 2025-10-12 19:19:13,736 - INFO - [STATUS] Client 127.0.0.1:34218: Estado: Conectado y listo
 2025-10-12 19:19:52,394 - INFO - [DISCONNECTION] Client 127.0.0.1:34218: Cliente desconectado
 2025-10-12 19:19:53,744 - INFO - [SERVER_STOP] Servidor detenido
+2025-10-12 23:07:07,799 - INFO - [SERVER_START] Servidor iniciado en 0.0.0.0:8080
+2025-10-12 23:08:11,867 - INFO - [SERVER_START] Servidor iniciado en 0.0.0.0:8080
+2025-10-12 23:09:38,574 - INFO - [SERVER_START] Servidor iniciado en 0.0.0.0:8080
+2025-10-12 23:11:12,267 - INFO - [SERVER_START] Servidor iniciado en 0.0.0.0:8080
+2025-10-12 23:11:25,124 - INFO - [CONNECTION] Client 127.0.0.1:59414: Cliente conectado
+2025-10-12 23:11:25,124 - INFO - [STATUS] Client 127.0.0.1:59414: Estado: Conectado y listo
+2025-10-12 23:13:09,384 - INFO - [CONNECTION] Client 127.0.0.1:59416: Cliente conectado
+2025-10-12 23:13:09,384 - INFO - [STATUS] Client 127.0.0.1:59416: Estado: Conectado y listo
+2025-10-12 23:15:06,136 - INFO - [DISCONNECTION] Client 127.0.0.1:59416: Cliente desconectado
+2025-10-12 23:15:08,207 - INFO - [DISCONNECTION] Client 127.0.0.1:59414: Cliente desconectado
+2025-10-12 23:23:00,343 - INFO - [SERVER_STOP] Servidor detenido
+2025-10-12 23:23:08,856 - INFO - [SERVER_START] Servidor iniciado en 0.0.0.0:8080
+2025-10-12 23:23:16,895 - INFO - [CONNECTION] Client 127.0.0.1:59418: Cliente conectado
+2025-10-12 23:23:16,896 - INFO - [STATUS] Client 127.0.0.1:59418: Estado: Conectado y listo
+2025-10-12 23:24:09,412 - INFO - [SERVER_STOP] Servidor detenido
+2025-10-12 23:24:45,507 - INFO - [SERVER_START] Servidor iniciado en 0.0.0.0:8080
+2025-10-12 23:24:49,470 - INFO - [CONNECTION] Client 127.0.0.1:59426: Cliente conectado
+2025-10-12 23:24:49,472 - INFO - [STATUS] Client 127.0.0.1:59426: Estado: Conectado y listo
+2025-10-12 23:26:08,624 - INFO - [SERVER_STOP] Servidor detenido
+2025-10-12 23:26:11,141 - INFO - [SERVER_START] Servidor iniciado en 0.0.0.0:8080
+2025-10-12 23:26:18,644 - INFO - [CONNECTION] Client 127.0.0.1:59428: Cliente conectado
+2025-10-12 23:26:18,646 - INFO - [STATUS] Client 127.0.0.1:59428: Estado: Conectado y listo
+2025-10-12 23:27:29,639 - INFO - [SERVER_STOP] Servidor detenido
+2025-10-12 23:27:30,905 - INFO - [SERVER_START] Servidor iniciado en 0.0.0.0:8080
+2025-10-12 23:27:39,668 - INFO - [CONNECTION] Client 127.0.0.1:59430: Cliente conectado
+2025-10-12 23:27:39,671 - INFO - [STATUS] Client 127.0.0.1:59430: Estado: Conectado y listo
+2025-10-12 23:28:45,482 - INFO - [SERVER_STOP] Servidor detenido
+2025-10-12 23:39:28,715 - INFO - [SERVER_START] Servidor iniciado en 0.0.0.0:8080
+2025-10-12 23:39:34,312 - INFO - [CONNECTION] Client 127.0.0.1:59548: Cliente conectado
+2025-10-12 23:39:34,313 - INFO - [STATUS] Client 127.0.0.1:59548: Estado: Conectado y listo
+2025-10-12 23:40:28,203 - INFO - [TASK_ASSIGNED] Client 127.0.0.1:59548: Tarea 1 asignada: {'url': 'https://www.python.org/'}
+2025-10-12 23:55:26,622 - INFO - [DISCONNECTION] Client 127.0.0.1:59548: Cliente desconectado
+2025-10-12 23:55:31,127 - INFO - [SERVER_STOP] Servidor detenido
+2025-10-12 23:55:34,077 - INFO - [SERVER_START] Servidor iniciado en 0.0.0.0:8080
+2025-10-12 23:55:42,453 - INFO - [CONNECTION] Client 127.0.0.1:59550: Cliente conectado
+2025-10-12 23:55:42,454 - INFO - [STATUS] Client 127.0.0.1:59550: Estado: Conectado y listo
+2025-10-12 23:56:47,512 - INFO - [ERROR] Client 127.0.0.1:59550: Error en comunicacion :Expecting value: line 1 column 1 (char 0)
+2025-10-12 23:56:47,512 - INFO - [DISCONNECTION] Client 127.0.0.1:59550: Cliente desconectado
+2025-10-12 23:57:02,528 - INFO - [CONNECTION] Client 127.0.0.1:59554: Cliente conectado
+2025-10-12 23:57:02,531 - INFO - [STATUS] Client 127.0.0.1:59554: Estado: Conectado y listo
+2025-10-12 23:58:41,750 - INFO - [DISCONNECTION] Client 127.0.0.1:59554: Cliente desconectado

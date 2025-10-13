@@ -22,6 +22,12 @@ class CentralServer():
         self.tasks = {}
         self.task_id_counter = 1
         self.log_entries = []
+        self.running = False
+        self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.server_socket.bind((self.host, self.port))
+        self.server_socket.listen(10)
+
     
     def receive_messages(self, client_socket):
         # recibe longitud primero
@@ -90,7 +96,7 @@ class CentralServer():
                     self.log_event('ERROR', 'Mensaje JSON invalido', client_id)
 
         except Exception as e:
-            self.log_event('ERROR', f'Error en comunicacion :{str(e)}', client_id)
+            self.log_event('ERROR', f"Error en comunicacion :{str(e)}", client_id)
         finally:
             # limpia cliente desconectado
             if client_id in self.clients:
@@ -145,12 +151,21 @@ class CentralServer():
         }
 
         try:
-            self.clients[client_id]['socket'].send(json.dumps(task_msg).encode())
+            self.clients[client_id]['socket'].send(json.dumps(task_msg).encode()) ##
+            while self.tasks[task_id]['status'] != 'completed':
+                message = self.receive_messages(self.clients[client_id]['socket'])
+                if not message:
+                    time.sleep(2)
+                else:
+                    self.process_client_message(client_id ,message)
+                
             self.log_event('TASK_ASSIGNED', f"Tarea {task_id} asignada: {task_data}", client_id)
             return True
         except ConnectionError:
             self.log_event('ERROR', 'No se pudo enviar la tarea al cliente', client_id)
             return False
+        
+        
         
     def get_system_status(self):
         '''obtiene el estado del sistema actualmente'''
@@ -161,29 +176,96 @@ class CentralServer():
             'completed_tasks': len([t for t in self.tasks.values() if t['status'] == 'completed']),
             'active_tasks': len([t for t in self.tasks.values() if t['status'] == 'assigned'])
         }
+
+    def inspect_client(self, client):
+        return self.clients[client]
     
     def start_socket_server(self):
         '''inicia el servidor de sockets'''
-        server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        server_socket.bind((self.host, self.port))
-        server_socket.listen(10)
+        self.running = True
 
         self.log_event('SERVER_START', f"Servidor iniciado en {self.host}:{self.port}")
 
         try:
-            while(True):
-                client_socket, client_address = server_socket.accept()
-                client_thread = threading.Thread(
-                    target=self.handle_client,
-                    args=(client_socket, client_address),
-                )
-                client_thread.daemon = True
-                client_thread.start()
+
+            accept_thread = threading.Thread(target=self.accepts_conections)
+            accept_thread.daemon = True
+            accept_thread.start()
+
+            # hilo para los comandos
+            while self.running:
+                self.command_interface()
+
         except KeyboardInterrupt:
             self.log_event('SERVER_STOP', 'Servidor detenido')
         finally:
-            server_socket.close()
+            self.server_socket.close()
+
+    def accepts_conections(self):
+        '''hilo para conexiones de clientes'''
+        while self.running:
+            try:
+
+                # timeout para verificar si esta corriendo periodicamente
+                self.server_socket.settimeout(1.0)
+                client_socket, client_address = self.server_socket.accept()
+                client_thread = threading.Thread(
+                    target=self.handle_client,
+                    args=(client_socket, client_address)
+                )
+                client_thread.daemon = True
+                client_thread.start()
+
+            except socket.timeout:
+                continue
+            except Exception as e:
+                if self.running:
+                    self.log_event('ERORR', f"Error en comunicacion: {e}")
+
+    def command_interface(self):
+        '''hilo para la interaccion con el usuario'''
+        help_text = '''Comandos disponibles: 
+        - "status": estado actual del sistema
+        - "clients": lista de clientes conectados
+        - "exit": cerrar servidor
+        - "help": mostrar esta ayuda\n
+        '''
+
+        while self.running:
+            try:
+                print("\n>>> ", end='', flush=True)
+                user_input = input().strip().lower()
+
+                if user_input == 'status':
+                    print(self.get_system_status())
+                elif user_input == 'clients':
+                    print('Clientes conectados:\n')
+                    for client in self.clients:
+                        print(client + '\n')
+                elif user_input == 'help':
+                    print(help_text)
+                elif user_input == 'exit':
+                    self.running = False
+                    try:
+                        self.server_socket.close()
+                        self.log_event('SERVER_STOP', 'Servidor detenido')
+                    except Exception as e:
+                        print(f"Error al cerrar el servidor: {e}")
+                elif len(user_input.split()) >= 2:
+                    parts = user_input.split()
+                    if parts[0] == 'client':
+                        print(self.inspect_client(parts[1]))
+                    elif parts[0] == 'asign':
+                        self.assign_tasks(parts[1], {'url': parts[2]})
+                elif user_input:
+                    print(f"Comando no reconocido: {user_input}")
+            
+            except KeyboardInterrupt:
+                pass
+            except Exception as e:
+                print(f"Error en interfaz de comandos: {e}")
+
+                
 
 if __name__ == "__main__":
     server = CentralServer()

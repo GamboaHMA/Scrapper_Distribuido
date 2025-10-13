@@ -16,3 +16,13 @@
 2025-10-12 18:43:47,969 - INFO - [SERVER_START] Servidor iniciado en 0.0.0.0:8080
 2025-10-12 18:43:53,141 - INFO - [CONNECTION] Client 127.0.0.1:51446: Cliente conectado
 2025-10-12 18:44:45,375 - INFO - [STATUS] Client 127.0.0.1:51446: Estado: Conectado y listo
+2025-10-12 22:07:05,709 - INFO - [SERVER_START] Servidor iniciado en 0.0.0.0:8080
+2025-10-12 22:07:21,460 - INFO - [CONNECTION] Client 127.0.0.1:51448: Cliente conectado
+2025-10-12 22:07:26,211 - INFO - [STATUS] Client 127.0.0.1:51448: Estado: Conectado y listo
+2025-10-12 22:08:16,349 - INFO - [DISCONNECTION] Client 127.0.0.1:51448: Cliente desconectado
+2025-10-12 22:08:23,921 - INFO - [CONNECTION] Client 127.0.0.1:51452: Cliente conectado
+2025-10-12 22:08:23,923 - INFO - [STATUS] Client 127.0.0.1:51452: Estado: Conectado y listo
+2025-10-12 22:10:53,722 - INFO - [DISCONNECTION] Client 127.0.0.1:51452: Cliente desconectado
+2025-10-12 22:11:25,150 - INFO - [CONNECTION] Client 127.0.0.1:51454: Cliente conectado
+2025-10-12 22:11:25,151 - INFO - [STATUS] Client 127.0.0.1:51454: Estado: Conectado y listo
+2025-10-12 23:08:47,718 - INFO - [SERVER_START] Servidor iniciado en 0.0.0.0:8080
