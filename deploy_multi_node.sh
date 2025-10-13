@@ -65,27 +65,186 @@ else
     DISTRIBUTE_SERVICES=false
 fi
 
-# Construir las imágenes
-echo -e "${YELLOW}Construyendo imagen del servidor...${NC}"
-if [ -d "$SERVER_DIR" ]; then
-    echo -e "${GREEN}Directorio del servidor encontrado: $SERVER_DIR${NC}"
-    docker build -t scrapper-server "$SERVER_DIR"
-else
-    echo -e "${RED}Error: Directorio del servidor no encontrado: $SERVER_DIR${NC}"
-    echo -e "${RED}Estructura de directorios actual:${NC}"
-    ls -la "$BASE_DIR"
-    exit 1
+# Opciones para manejar imágenes en múltiples nodos
+echo -e "${BLUE}====== Gestión de imágenes Docker entre nodos ======${NC}"
+echo -e "${YELLOW}En un entorno multi-nodo, las imágenes deben estar disponibles en todos los nodos.${NC}"
+echo -e "${YELLOW}Selecciona una opción para manejar las imágenes:${NC}"
+echo -e "1) Construir imágenes localmente en este nodo y exportarlas para importar en otros nodos"
+echo -e "2) Construir imágenes en cada nodo individualmente (requiere código fuente en ambas computadoras)"
+echo -e "3) Usar registro Docker (requiere un registro Docker configurado)"
+echo -e "4) Continuar sin gestión especial (las imágenes se descargarán cuando sea necesario si es posible)"
+
+read -p "Selecciona una opción (1-4): " IMAGE_OPTION
+
+case $IMAGE_OPTION in
+    1)
+        # Opción 1: Construir y exportar imágenes
+        echo -e "${YELLOW}Construyendo y exportando imágenes...${NC}"
+        
+        # Construir las imágenes
+        echo -e "${YELLOW}Construyendo imagen del servidor...${NC}"
+        if [ -d "$SERVER_DIR" ]; then
+            echo -e "${GREEN}Directorio del servidor encontrado: $SERVER_DIR${NC}"
+            docker build -t scrapper-server "$SERVER_DIR"
+        else
+            echo -e "${RED}Error: Directorio del servidor no encontrado: $SERVER_DIR${NC}"
+            echo -e "${RED}Estructura de directorios actual:${NC}"
+            ls -la "$BASE_DIR"
+            exit 1
+        fi
+        
+        echo -e "${YELLOW}Construyendo imagen del cliente...${NC}"
+        if [ -d "$CLIENT_DIR" ]; then
+            echo -e "${GREEN}Directorio del cliente encontrado: $CLIENT_DIR${NC}"
+            docker build -t scrapper-client "$CLIENT_DIR"
+        else
+            echo -e "${RED}Error: Directorio del cliente no encontrado: $CLIENT_DIR${NC}"
+            echo -e "${RED}Estructura de directorios actual:${NC}"
+            ls -la "$BASE_DIR"
+            exit 1
+        fi
+        
+        # Guardar las imágenes como archivos tar
+        echo -e "${YELLOW}Guardando imágenes como archivos tar...${NC}"
+        docker save -o "$BASE_DIR/scrapper-server.tar" scrapper-server
+        docker save -o "$BASE_DIR/scrapper-client.tar" scrapper-client
+        
+        echo -e "${GREEN}Imágenes guardadas en:${NC}"
+        echo -e "- $BASE_DIR/scrapper-server.tar"
+        echo -e "- $BASE_DIR/scrapper-client.tar"
+        
+        echo -e "${YELLOW}====== INSTRUCCIONES PARA OTROS NODOS ======${NC}"
+        echo -e "${YELLOW}1. Copia los archivos .tar a los otros nodos${NC}"
+        echo -e "${YELLOW}2. En cada nodo, ejecuta:${NC}"
+        echo -e "   docker load -i scrapper-server.tar"
+        echo -e "   docker load -i scrapper-client.tar"
+        
+        read -p "¿Has importado las imágenes en todos los nodos? (s/n): " IMAGES_IMPORTED
+        if [[ $IMAGES_IMPORTED != "s" && $IMAGES_IMPORTED != "S" ]]; then
+            echo -e "${RED}Por favor, importa las imágenes en todos los nodos antes de continuar.${NC}"
+            exit 1
+        fi
+        ;;
+        
+    2)
+        # Opción 2: Construir en cada nodo individualmente
+        echo -e "${YELLOW}Construyendo imágenes localmente...${NC}"
+        
+        # Construir las imágenes
+        echo -e "${YELLOW}Construyendo imagen del servidor...${NC}"
+        if [ -d "$SERVER_DIR" ]; then
+            echo -e "${GREEN}Directorio del servidor encontrado: $SERVER_DIR${NC}"
+            docker build -t scrapper-server "$SERVER_DIR"
+        else
+            echo -e "${RED}Error: Directorio del servidor no encontrado: $SERVER_DIR${NC}"
+            echo -e "${RED}Estructura de directorios actual:${NC}"
+            ls -la "$BASE_DIR"
+            exit 1
+        fi
+        
+        echo -e "${YELLOW}Construyendo imagen del cliente...${NC}"
+        if [ -d "$CLIENT_DIR" ]; then
+            echo -e "${GREEN}Directorio del cliente encontrado: $CLIENT_DIR${NC}"
+            docker build -t scrapper-client "$CLIENT_DIR"
+        else
+            echo -e "${RED}Error: Directorio del cliente no encontrado: $CLIENT_DIR${NC}"
+            echo -e "${RED}Estructura de directorios actual:${NC}"
+            ls -la "$BASE_DIR"
+            exit 1
+        fi
+        
+        echo -e "${YELLOW}====== INSTRUCCIONES PARA OTROS NODOS ======${NC}"
+        echo -e "${YELLOW}En cada nodo worker, ejecuta:${NC}"
+        echo -e "   cd /ruta/al/proyecto"
+        echo -e "   docker build -t scrapper-server ./server"
+        echo -e "   docker build -t scrapper-client ./client"
+        
+        read -p "¿Has construido las imágenes en todos los nodos? (s/n): " IMAGES_BUILT
+        if [[ $IMAGES_BUILT != "s" && $IMAGES_BUILT != "S" ]]; then
+            echo -e "${RED}Por favor, construye las imágenes en todos los nodos antes de continuar.${NC}"
+            exit 1
+        fi
+        ;;
+        
+    3)
+        # Opción 3: Usar registro Docker
+        echo -e "${YELLOW}Usando registro Docker...${NC}"
+        
+        read -p "Introduce la dirección de tu registro Docker (ej. localhost:5000, mirepo.com): " REGISTRY
+        
+        # Construir las imágenes
+        echo -e "${YELLOW}Construyendo imagen del servidor...${NC}"
+        if [ -d "$SERVER_DIR" ]; then
+            echo -e "${GREEN}Directorio del servidor encontrado: $SERVER_DIR${NC}"
+            docker build -t "$REGISTRY/scrapper-server" "$SERVER_DIR"
+        else
+            echo -e "${RED}Error: Directorio del servidor no encontrado: $SERVER_DIR${NC}"
+            echo -e "${RED}Estructura de directorios actual:${NC}"
+            ls -la "$BASE_DIR"
+            exit 1
+        fi
+        
+        echo -e "${YELLOW}Construyendo imagen del cliente...${NC}"
+        if [ -d "$CLIENT_DIR" ]; then
+            echo -e "${GREEN}Directorio del cliente encontrado: $CLIENT_DIR${NC}"
+            docker build -t "$REGISTRY/scrapper-client" "$CLIENT_DIR"
+        else
+            echo -e "${RED}Error: Directorio del cliente no encontrado: $CLIENT_DIR${NC}"
+            echo -e "${RED}Estructura de directorios actual:${NC}"
+            ls -la "$BASE_DIR"
+            exit 1
+        fi
+        
+        # Subir las imágenes al registro
+        echo -e "${YELLOW}Subiendo imágenes al registro...${NC}"
+        docker push "$REGISTRY/scrapper-server"
+        docker push "$REGISTRY/scrapper-client"
+        
+        # Actualizar los nombres de las imágenes para usar en los servicios
+        SCRAPPER_SERVER_IMAGE="$REGISTRY/scrapper-server"
+        SCRAPPER_CLIENT_IMAGE="$REGISTRY/scrapper-client"
+        ;;
+        
+    4|*)
+        # Opción 4 o por defecto: Continuar sin gestión especial
+        echo -e "${YELLOW}Continuando con la construcción local de imágenes...${NC}"
+        
+        # Construir las imágenes
+        echo -e "${YELLOW}Construyendo imagen del servidor...${NC}"
+        if [ -d "$SERVER_DIR" ]; then
+            echo -e "${GREEN}Directorio del servidor encontrado: $SERVER_DIR${NC}"
+            docker build -t scrapper-server "$SERVER_DIR"
+        else
+            echo -e "${RED}Error: Directorio del servidor no encontrado: $SERVER_DIR${NC}"
+            echo -e "${RED}Estructura de directorios actual:${NC}"
+            ls -la "$BASE_DIR"
+            exit 1
+        fi
+        
+        echo -e "${YELLOW}Construyendo imagen del cliente...${NC}"
+        if [ -d "$CLIENT_DIR" ]; then
+            echo -e "${GREEN}Directorio del cliente encontrado: $CLIENT_DIR${NC}"
+            docker build -t scrapper-client "$CLIENT_DIR"
+        else
+            echo -e "${RED}Error: Directorio del cliente no encontrado: $CLIENT_DIR${NC}"
+            echo -e "${RED}Estructura de directorios actual:${NC}"
+            ls -la "$BASE_DIR"
+            exit 1
+        fi
+        
+        echo -e "${YELLOW}ADVERTENCIA: Es posible que los nodos worker necesiten descargar o construir las imágenes.${NC}"
+        SCRAPPER_SERVER_IMAGE="scrapper-server"
+        SCRAPPER_CLIENT_IMAGE="scrapper-client"
+        ;;
+esac
+
+# Si no se establecieron los nombres de las imágenes en el caso 3, establecerlos ahora
+if [ -z "$SCRAPPER_SERVER_IMAGE" ]; then
+    SCRAPPER_SERVER_IMAGE="scrapper-server"
 fi
 
-echo -e "${YELLOW}Construyendo imagen del cliente...${NC}"
-if [ -d "$CLIENT_DIR" ]; then
-    echo -e "${GREEN}Directorio del cliente encontrado: $CLIENT_DIR${NC}"
-    docker build -t scrapper-client "$CLIENT_DIR"
-else
-    echo -e "${RED}Error: Directorio del cliente no encontrado: $CLIENT_DIR${NC}"
-    echo -e "${RED}Estructura de directorios actual:${NC}"
-    ls -la "$BASE_DIR"
-    exit 1
+if [ -z "$SCRAPPER_CLIENT_IMAGE" ]; then
+    SCRAPPER_CLIENT_IMAGE="scrapper-client"
 fi
 
 # Desplegar el servicio del servidor (preferiblemente en el nodo manager)
@@ -97,14 +256,14 @@ if [ "$DISTRIBUTE_SERVICES" = true ]; then
         --replicas 1 \
         --constraint 'node.role == manager' \
         --publish 8080:8080 \
-        scrapper-server
+        $SCRAPPER_SERVER_IMAGE
 else
     docker service create \
         --name scrapper-server \
         --network scrapper-network \
         --replicas 1 \
         --publish 8080:8080 \
-        scrapper-server
+        $SCRAPPER_SERVER_IMAGE
 fi
 
 # Esperar a que el servidor esté listo
@@ -123,7 +282,7 @@ if [ "$DISTRIBUTE_SERVICES" = true ]; then
         --constraint 'node.role == worker' \
         --env SERVER_HOST=scrapper-server \
         --env SERVER_PORT=8080 \
-        scrapper-client
+        $SCRAPPER_CLIENT_IMAGE
     
     echo -e "${GREEN}Clientes desplegados en nodos worker.${NC}"
 else
@@ -133,7 +292,7 @@ else
         --replicas 3 \
         --env SERVER_HOST=scrapper-server \
         --env SERVER_PORT=8080 \
-        scrapper-client
+        $SCRAPPER_CLIENT_IMAGE
     
     echo -e "${YELLOW}Todos los clientes se ejecutan en el único nodo disponible.${NC}"
 fi
@@ -149,7 +308,81 @@ docker service ps scrapper-server
 echo -e "${YELLOW}Distribución del servicio del cliente:${NC}"
 docker service ps scrapper-client
 
-echo -e "${BLUE}Para escalar el número de clientes, ejecuta:${NC}"
+# Opciones interactivas
+echo -e "${BLUE}====== Opciones Interactivas ======${NC}"
+echo -e "${YELLOW}¿Qué deseas hacer ahora?${NC}"
+echo -e "1) Ver logs del servidor en tiempo real"
+echo -e "2) Ver logs de un cliente específico en tiempo real"
+echo -e "3) Abrir shell interactivo en un contenedor del servidor"
+echo -e "4) Abrir shell interactivo en un contenedor cliente"
+echo -e "5) Escalar el número de clientes"
+echo -e "6) Monitorear todos los servicios"
+echo -e "7) Salir sin hacer nada más"
+
+read -p "Selecciona una opción (1-7): " INTERACTIVE_OPTION
+
+case $INTERACTIVE_OPTION in
+    1)
+        echo -e "${YELLOW}Mostrando logs del servidor en tiempo real (Ctrl+C para salir):${NC}"
+        docker service logs scrapper-server --follow
+        ;;
+    2)
+        echo -e "${YELLOW}Contenedores cliente disponibles:${NC}"
+        CLIENT_CONTAINERS=$(docker ps --filter name=scrapper-client --format "{{.Names}}")
+        
+        if [ -z "$CLIENT_CONTAINERS" ]; then
+            echo -e "${RED}No se encontraron contenedores cliente.${NC}"
+        else
+            echo "$CLIENT_CONTAINERS"
+            echo ""
+            read -p "Ingresa el nombre del contenedor cliente para ver sus logs: " SELECTED_CLIENT
+            echo -e "${YELLOW}Mostrando logs del cliente $SELECTED_CLIENT en tiempo real (Ctrl+C para salir):${NC}"
+            docker logs $SELECTED_CLIENT --follow
+        fi
+        ;;
+    3)
+        echo -e "${YELLOW}Buscando contenedor del servidor...${NC}"
+        SERVER_CONTAINER=$(docker ps --filter name=scrapper-server --format "{{.Names}}" | head -n 1)
+        
+        if [ -z "$SERVER_CONTAINER" ]; then
+            echo -e "${RED}No se encontró el contenedor del servidor.${NC}"
+        else
+            echo -e "${GREEN}Abriendo shell interactivo en el contenedor $SERVER_CONTAINER...${NC}"
+            echo -e "${YELLOW}Para salir del contenedor escribe 'exit'${NC}"
+            docker exec -it $SERVER_CONTAINER /bin/bash || docker exec -it $SERVER_CONTAINER /bin/sh
+        fi
+        ;;
+    4)
+        echo -e "${YELLOW}Contenedores cliente disponibles:${NC}"
+        CLIENT_CONTAINERS=$(docker ps --filter name=scrapper-client --format "{{.Names}}")
+        
+        if [ -z "$CLIENT_CONTAINERS" ]; then
+            echo -e "${RED}No se encontraron contenedores cliente.${NC}"
+        else
+            echo "$CLIENT_CONTAINERS"
+            echo ""
+            read -p "Ingresa el nombre del contenedor cliente para abrir shell: " SELECTED_CLIENT
+            echo -e "${GREEN}Abriendo shell interactivo en el contenedor $SELECTED_CLIENT...${NC}"
+            echo -e "${YELLOW}Para salir del contenedor escribe 'exit'${NC}"
+            docker exec -it $SELECTED_CLIENT /bin/bash || docker exec -it $SELECTED_CLIENT /bin/sh
+        fi
+        ;;
+    5)
+        read -p "Ingresa el número de clientes que deseas ejecutar: " CLIENT_COUNT
+        echo -e "${YELLOW}Escalando servicio de clientes a $CLIENT_COUNT réplicas...${NC}"
+        docker service scale scrapper-client=$CLIENT_COUNT
+        ;;
+    6)
+        echo -e "${YELLOW}Iniciando monitoreo de servicios (Ctrl+C para salir)...${NC}"
+        watch -n 2 'echo "==== SERVICIOS ====" && docker service ls && echo "\n==== SERVIDOR ====" && docker service ps scrapper-server && echo "\n==== CLIENTES ====" && docker service ps scrapper-client'
+        ;;
+    7|*)
+        echo -e "${GREEN}Finalizado. Los servicios continúan ejecutándose en segundo plano.${NC}"
+        ;;
+esac
+
+echo -e "${BLUE}\n====== Comandos Útiles ======${NC}"
+echo -e "${BLUE}Para escalar el número de clientes:${NC}"
 echo -e "docker service scale scrapper-client=<número_de_réplicas>"
 
 echo -e "${BLUE}Para ver los logs del servidor:${NC}"
@@ -157,6 +390,12 @@ echo -e "docker service logs scrapper-server"
 
 echo -e "${BLUE}Para ver los logs de los clientes:${NC}"
 echo -e "docker service logs scrapper-client"
+
+echo -e "${BLUE}Para interactuar con un contenedor específico:${NC}"
+echo -e "docker exec -it <nombre_contenedor> /bin/bash"
+
+echo -e "${BLUE}Para ejecutar este menú interactivo nuevamente:${NC}"
+echo -e "./interactive_menu.sh"
 
 echo -e "${RED}Para eliminar los servicios:${NC}"
 echo -e "docker service rm scrapper-server scrapper-client"
