@@ -173,3 +173,58 @@
 2025-10-13 04:54:06,581 - INFO - [PING] Client 127.0.0.1:32924: Recibiendo ping
 2025-10-13 04:55:06,616 - INFO - [PING] Client 127.0.0.1:32924: Recibiendo ping
 2025-10-13 04:55:12,157 - INFO - [SERVER_STOP] Servidor detenido
+2025-10-13 14:45:55,416 - INFO - [SERVER_START] Servidor iniciado en 0.0.0.0:8080
+2025-10-13 14:46:04,791 - INFO - [CONNECTION] Client 127.0.0.1:36516: Cliente conectado
+2025-10-13 14:46:04,792 - INFO - [PING] Client 127.0.0.1:36516: Recibiendo ping
+2025-10-13 14:46:04,792 - INFO - [STATUS] Client 127.0.0.1:36516: Estado: Conectado y listo
+2025-10-13 14:46:27,657 - INFO - [CONNECTION] Client 127.0.0.1:36520: Cliente conectado
+2025-10-13 14:47:04,852 - INFO - [PING] Client 127.0.0.1:36516: Recibiendo ping
+2025-10-13 14:47:10,608 - INFO - [TASK_ASSIGNED] Client 127.0.0.1:36516: Tarea 1 asignada: {'url': 'https://www.python.org/'}
+2025-10-13 14:47:48,189 - INFO - [DISCONNECTION] Client 127.0.0.1:36516: Cliente desconectado
+2025-10-13 14:47:52,739 - INFO - [DISCONNECTION] Client 127.0.0.1:36520: Cliente desconectado
+2025-10-13 14:47:57,350 - INFO - [SERVER_STOP] Servidor detenido
+2025-10-13 14:48:00,806 - INFO - [SERVER_START] Servidor iniciado en 0.0.0.0:8080
+2025-10-13 14:48:04,345 - INFO - [CONNECTION] Client 127.0.0.1:36522: Cliente conectado
+2025-10-13 14:48:04,347 - INFO - [PING] Client 127.0.0.1:36522: Recibiendo ping
+2025-10-13 14:48:04,347 - INFO - [STATUS] Client 127.0.0.1:36522: Estado: Conectado y listo
+2025-10-13 14:48:11,758 - INFO - [CONNECTION] Client 127.0.0.1:36524: Cliente conectado
+2025-10-13 14:48:53,984 - INFO - [TASK_ASSIGNED] Client 127.0.0.1:36522: Tarea 1 asignada: {'url': 'htpps://www.python.org/'}
+2025-10-13 14:48:53,987 - INFO - [TAKE_RESULT] Client 127.0.0.1:36522: Tarea 1 completada: {'status': 'error', 'error': 'URL no válida: htpps://www.python.org/'}
+2025-10-13 14:50:50,704 - INFO - [SERVER_STOP] Servidor detenido
+2025-10-13 14:51:00,693 - INFO - [SERVER_START] Servidor iniciado en 0.0.0.0:8080
+2025-10-13 14:51:00,733 - INFO - [CONNECTION] Client 127.0.0.1:36526: Cliente conectado
+2025-10-13 14:51:00,733 - INFO - [PING] Client 127.0.0.1:36526: Recibiendo ping
+2025-10-13 14:51:00,733 - INFO - [STATUS] Client 127.0.0.1:36526: Estado: Conectado y listo
+2025-10-13 14:51:04,525 - INFO - [PING] Client 127.0.0.1:36526: Recibiendo ping
+2025-10-13 14:51:05,594 - INFO - [CONNECTION] Client 127.0.0.1:36528: Cliente conectado
+2025-10-13 14:51:46,316 - INFO - [TASK_ASSIGNED] Client 127.0.0.1:36526: Tarea 1 asignada: {'url': 'https://www.python.org/'}
+2025-10-13 14:52:00,794 - INFO - [PING] Client 127.0.0.1:36526: Recibiendo ping
+2025-10-13 14:52:04,585 - INFO - [PING] Client 127.0.0.1:36526: Recibiendo ping
+2025-10-13 14:53:00,854 - INFO - [PING] Client 127.0.0.1:36526: Recibiendo ping
+2025-10-13 14:53:04,591 - INFO - [PING] Client 127.0.0.1:36526: Recibiendo ping
+2025-10-13 14:53:48,995 - INFO - [DISCONNECTION] Client 127.0.0.1:36528: Cliente desconectado
+2025-10-13 14:53:52,950 - INFO - [CONNECTION] Client 127.0.0.1:36530: Cliente conectado
+2025-10-13 14:54:00,914 - INFO - [PING] Client 127.0.0.1:36526: Recibiendo ping
+2025-10-13 14:54:04,651 - INFO - [PING] Client 127.0.0.1:36526: Recibiendo ping
+2025-10-13 14:54:15,169 - INFO - [DISCONNECTION] Client 127.0.0.1:36530: Cliente desconectado
+2025-10-13 14:54:17,398 - INFO - [CONNECTION] Client 127.0.0.1:36532: Cliente conectado
+2025-10-13 14:54:48,080 - INFO - [DISCONNECTION] Client 127.0.0.1:36532: Cliente desconectado
+2025-10-13 14:54:58,308 - INFO - [CONNECTION] Client 127.0.0.1:36534: Cliente conectado
+2025-10-13 14:55:00,975 - INFO - [PING] Client 127.0.0.1:36526: Recibiendo ping
+2025-10-13 14:55:04,710 - INFO - [PING] Client 127.0.0.1:36526: Recibiendo ping
+2025-10-13 14:55:05,463 - INFO - [DISCONNECTION] Client 127.0.0.1:36534: Cliente desconectado
+2025-10-13 14:55:08,535 - INFO - [CONNECTION] Client 127.0.0.1:36536: Cliente conectado
+2025-10-13 14:55:13,383 - INFO - [DISCONNECTION] Client 127.0.0.1:36536: Cliente desconectado
+2025-10-13 14:55:21,580 - INFO - [CONNECTION] Client 127.0.0.1:36538: Cliente conectado
+2025-10-13 14:55:45,464 - INFO - [DISCONNECTION] Client 127.0.0.1:36538: Cliente desconectado
+2025-10-13 14:55:54,644 - INFO - [CONNECTION] Client 127.0.0.1:36540: Cliente conectado
+2025-10-13 14:56:01,033 - INFO - [PING] Client 127.0.0.1:36526: Recibiendo ping
+2025-10-13 14:56:04,761 - INFO - [PING] Client 127.0.0.1:36526: Recibiendo ping
+2025-10-13 14:56:25,210 - INFO - [DISCONNECTION] Client 127.0.0.1:36540: Cliente desconectado
+2025-10-13 14:57:01,092 - INFO - [PING] Client 127.0.0.1:36526: Recibiendo ping
+2025-10-13 14:57:04,820 - INFO - [PING] Client 127.0.0.1:36526: Recibiendo ping
+2025-10-13 14:57:25,155 - INFO - [CONNECTION] Client 127.0.0.1:36542: Cliente conectado
+2025-10-13 14:57:49,812 - INFO - [DISCONNECTION] Client 127.0.0.1:36542: Cliente desconectado
+2025-10-13 14:58:01,153 - INFO - [PING] Client 127.0.0.1:36526: Recibiendo ping
+2025-10-13 14:58:04,881 - INFO - [PING] Client 127.0.0.1:36526: Recibiendo ping
+2025-10-13 14:58:09,686 - INFO - [SERVER_STOP] Servidor detenido

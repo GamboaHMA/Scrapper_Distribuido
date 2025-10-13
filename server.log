@@ -241,3 +241,24 @@
 2025-10-13 04:48:07,188 - INFO - [PING] Client 127.0.0.1:32878: Recibiendo ping
 2025-10-13 04:48:09,020 - INFO - [PING] Client 127.0.0.1:32878: Recibiendo ping
 2025-10-13 04:48:30,334 - INFO - [PING] Client 127.0.0.1:32878: Recibiendo ping
+2025-10-13 14:28:19,642 - INFO - [SERVER_START] Servidor iniciado en 0.0.0.0:8080
+2025-10-13 14:30:00,227 - INFO - [CONNECTION] Client 127.0.0.1:36490: Cliente conectado
+2025-10-13 14:30:13,156 - INFO - [CONNECTION] Client 127.0.0.1:36492: Cliente conectado
+2025-10-13 14:30:55,266 - INFO - [SERVER_START] Servidor iniciado en 0.0.0.0:8080
+2025-10-13 14:31:21,948 - INFO - [CONNECTION] Client 127.0.0.1:36498: Cliente conectado
+2025-10-13 14:31:41,906 - INFO - [CONNECTION] Client 127.0.0.1:36500: Cliente conectado
+2025-10-13 14:31:41,906 - INFO - [DISCONNECTION] Client 127.0.0.1:36498: Cliente desconectado
+2025-10-13 14:31:50,558 - INFO - [DISCONNECTION] Client 127.0.0.1:36500: Cliente desconectado
+2025-10-13 14:31:58,632 - INFO - [CONNECTION] Client 127.0.0.1:36502: Cliente conectado
+2025-10-13 14:33:38,590 - INFO - [DISCONNECTION] Client 127.0.0.1:36502: Cliente desconectado
+2025-10-13 14:34:12,778 - INFO - [SERVER_START] Servidor iniciado en 0.0.0.0:8080
+2025-10-13 14:34:18,151 - INFO - [CONNECTION] Client 127.0.0.1:36504: Cliente conectado
+2025-10-13 14:35:49,686 - INFO - [SERVER_START] Servidor iniciado en 0.0.0.0:8080
+2025-10-13 14:36:00,922 - INFO - [CONNECTION] Client 127.0.0.1:36508: Cliente conectado
+2025-10-13 14:39:07,849 - INFO - [ERROR] Client 127.0.0.1:36508: Error en comunicacion :'str' object has no attribute 'get'
+2025-10-13 14:39:07,851 - INFO - [DISCONNECTION] Client 127.0.0.1:36508: Cliente desconectado
+2025-10-13 14:39:26,905 - INFO - [SERVER_START] Servidor iniciado en 0.0.0.0:8080
+2025-10-13 14:39:35,912 - INFO - [CONNECTION] Client 127.0.0.1:36512: Cliente conectado
+2025-10-13 14:43:07,996 - INFO - [SERVER_START] Servidor iniciado en 0.0.0.0:8080
+2025-10-13 14:43:15,600 - INFO - [CONNECTION] Client 127.0.0.1:36514: Cliente conectado
+2025-10-13 14:44:22,173 - INFO - [TASK_ASSIGNED] Client 127.0.0.1:36514: Tarea 1 asignada: {'url': 'https://www.python.org/'}

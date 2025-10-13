@@ -114,6 +114,19 @@ class CentralServer():
             self.clients[client_id]['last_heartbeat'] = datetime.now().isoformat()
             self.clients[client_id]['status'] = 'active'
             self.log_event('PING', "Recibiendo ping", client_id)
+
+        elif msg_type == 'command':
+            if message.get('data')[0] == 'assign':
+                client_id = message.get('client_id')
+                url = message.get('data')[2]
+                self.assign_tasks(client_id, {'url': url})
+            elif message.get('data')[0] == 'status':
+                print(self.get_system_status())
+            elif message.get('data')[0] == 'clients':
+                print('Clientes conectados:\n')
+                for client in self.clients:
+                    print(client + '\n')
+
         
         elif msg_type == 'task_result':
             task_id = message.get('task_id')
