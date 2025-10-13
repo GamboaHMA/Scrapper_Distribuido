@@ -4,6 +4,7 @@ import json
 import time
 from datetime import datetime
 import logging
+import struct
 
 logging.basicConfig(
     level=logging.INFO,
@@ -31,15 +32,16 @@ class CentralServer():
     
     def receive_messages(self, client_socket):
         # recibe longitud primero
-        lenght_bytes = client_socket.recv(4)
+        lenght_bytes = client_socket.recv(2)
         if not lenght_bytes:
             return False
 
-        lenght =  int.from_bytes(lenght_bytes, 'big')
+        lenght =  int.from_bytes(lenght_bytes, 'big') 
         # recibe mensaje completo
         data = b""
         while(len(data) < lenght):
-            chunk = client_socket.recv(min(1024, lenght - len(data)))
+            len_data = len(data)
+            chunk = client_socket.recv(min(1024, lenght - len_data))
             if not chunk:
                 break
             data += chunk
@@ -111,8 +113,9 @@ class CentralServer():
         if msg_type == 'heartbeat':
             self.clients[client_id]['last_heartbeat'] = datetime.now().isoformat()
             self.clients[client_id]['status'] = 'active'
+            self.log_event('PING', "Recibiendo ping", client_id)
         
-        elif msg_type == 'take_result':
+        elif msg_type == 'task_result':
             task_id = message.get('task_id')
             result = message.get('result')
             self.log_event('TAKE_RESULT', f"Tarea {task_id} completada: {result}", client_id)
@@ -152,14 +155,11 @@ class CentralServer():
 
         try:
             self.clients[client_id]['socket'].send(json.dumps(task_msg).encode()) ##
-            while self.tasks[task_id]['status'] != 'completed':
-                message = self.receive_messages(self.clients[client_id]['socket'])
-                if not message:
-                    time.sleep(2)
-                else:
-                    self.process_client_message(client_id ,message)
-                
             self.log_event('TASK_ASSIGNED', f"Tarea {task_id} asignada: {task_data}", client_id)
+
+            message = self.receive_messages(self.clients[client_id]['socket'])
+            print(message)
+                
             return True
         except ConnectionError:
             self.log_event('ERROR', 'No se pudo enviar la tarea al cliente', client_id)
@@ -174,7 +174,7 @@ class CentralServer():
             'connected_clients': list(self.clients.keys()),
             'total_tasks': len(self.tasks),
             'completed_tasks': len([t for t in self.tasks.values() if t['status'] == 'completed']),
-            'active_tasks': len([t for t in self.tasks.values() if t['status'] == 'assigned'])
+            'assigned_tasks': len([t for t in self.tasks.values() if t['status'] == 'assigned'])
         }
 
     def inspect_client(self, client):
@@ -216,6 +216,8 @@ class CentralServer():
                 client_thread.daemon = True
                 client_thread.start()
 
+                
+
             except socket.timeout:
                 continue
             except Exception as e:
@@ -255,7 +257,7 @@ class CentralServer():
                     parts = user_input.split()
                     if parts[0] == 'client':
                         print(self.inspect_client(parts[1]))
-                    elif parts[0] == 'asign':
+                    elif parts[0] == 'assign':
                         self.assign_tasks(parts[1], {'url': parts[2]})
                 elif user_input:
                     print(f"Comando no reconocido: {user_input}")

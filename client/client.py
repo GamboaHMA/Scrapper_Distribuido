@@ -6,6 +6,8 @@ import random
 import logging
 import os
 from datetime import datetime
+import struct
+import queue
 
 # Importar funciones de scrapping desde el módulo scrapper
 from scrapper import get_html_from_url
@@ -26,6 +28,11 @@ class ClientNode():
         self.socket = None
         self.current_task = {}
         self.send_lock = threading.Lock()
+        # cola para mensajes de salida y evento de parada   
+        self.message_queue = queue.Queue()
+        self.stop_event = threading.Event()
+        # hilo de envio 
+        self.send_thread = None
 
     def connect_to_server(self):
         '''conecta al servidor central'''
@@ -34,6 +41,12 @@ class ClientNode():
             self.socket.connect((self.server_host, self.server_port))
             self.connected = True
             logging.info(f"Conectado al servidor {self.server_host}:{self.server_port}")
+
+            # inicia hilo de envio
+            self.stop_event.clear()
+            self.send_thread = threading.Thread(target=self._send_worker)
+            self.send_thread.daemon = True
+            self.send_thread.start()
 
             # recibe mensaje de welcome de server
             welcome_data = self.socket.recv(1024).decode()
@@ -46,6 +59,57 @@ class ClientNode():
         except Exception as e:
             logging.error(f"Error conectando aal servidor: {e}")
             return False
+        
+    def _send_worker(self):
+        '''hilo que envia mensajes desde la cola'''
+        while self.connected and not self.stop_event.is_set():
+            try:
+                # esperar mensaje con timeout para poder verificar stop_event
+                message = self.message_queue.get(timeout=1.0)
+
+                if message is None:
+                    break
+
+                try:
+                    # enviar longitud del mensaje(por ahora 2 bytes)
+                    lenght = len(message)
+                    self.socket.send(lenght.to_bytes(2, 'big'))
+
+                    # enviar mensaje completo
+                    self.socket.send(message)
+                
+                except Exception as e:
+                    logging.error(f"Error enviando mensaje: {e}")
+                    self.connected = False
+
+                    if not self.stop_event.is_set():
+                        self.message_queue.put(message)
+                    break
+                    
+                self.message_queue.task_done()
+            
+            except queue.Empty:
+                # timeout, verificar si debemos continuar
+                continue
+            
+            except Exception as e:
+                logging.error(f"Error en hilo de envio: {e}")
+        
+    def _enqueue_message(self, message_dict):
+        '''encola un mensaje para eviar'''
+        if not self.connected:
+            logging.warning("Cliente no conectado, no se puede enviar mensaje")
+            return False
+        
+        try:
+            message_bytes = json.dumps(message_dict).encode()
+            self.message_queue.put(message_bytes)
+            return True
+        
+        except Exception as e:
+            logging.error(f"Error encolando mensaje: {e}")
+            return False
+    
     
     def send_heartbeat(self):
         '''envia senial periodica al server'''
@@ -53,16 +117,13 @@ class ClientNode():
             try:
                 heartbeat_msg = {
                     'type': 'heartbeat',
+                    'client_id': self.client_id,
                     'time_now': datetime.now().isoformat()
                 }
-                message = json.dumps(heartbeat_msg).encode()
 
-                with self.send_lock:
-                    lenght = len(message)
-                    self.socket.send(lenght.to_bytes(4, 'big'))
-                    self.socket.send(message)
+                self._enqueue_message(heartbeat_msg)
 
-                time.sleep(5) # latido cada 5 segundos
+                time.sleep(60) # latido cada 5 segundos
             
             except Exception:
                 self.connected = False
@@ -72,14 +133,12 @@ class ClientNode():
         try:
             status_msg = {
                 'type': 'status',
+                'client_id': self.client_id,
                 'status': status,
                 'time_now': datetime.now().isoformat()
             }
-            message = json.dumps(status_msg).encode()
-            with self.send_lock:
-                lenght = len(message)
-                self.socket.send(lenght.to_bytes(4, 'big'))
-                self.socket.send(message)
+
+            return self._enqueue_message(status_msg)
         
         except Exception:
             self.connected = False
@@ -124,29 +183,24 @@ class ClientNode():
         # Preparar mensaje de resultado para el servidor
         result_msg = {
             'type': 'task_result',
+            'client_id': self.client_id,
             'task_id': task_id,
             'result': result,
             'completed_at': datetime.now().isoformat()
         }
 
-        try:
-            self.socket.send(json.dumps(result_msg).encode())
-            message = json.dumps(result_msg).encode()
-            with self.send_lock:
-                lenght = len(message)
-                self.socket.send(lenght.to_bytes(4, 'big'))
-                self.socket.send(message)
-
+        if self._enqueue_message(result_msg):
             logging.info(f"Tarea {task_id} completada y enviada al servidor")
-        
-        except Exception as e:
-            logging.error(f"Error al enviar resultados al servidor: {e}")
+        else:
+            logging.error(f"Error al encolar resultados de tarea {task_id}")
             self.connected = False
+        
         
     def listen_for_tasks(self):
         '''escuchando tareas del servidor'''
-        while self.connected:
+        while self.connected and not self.stop_event.is_set():
             try:
+                # como las tareas se sabe que son menores que 1024 pues nos podemos saltar el protocolo
                 data = self.socket.recv(1024).decode()
                 if not data:
                     self.connected = False
@@ -187,11 +241,31 @@ class ClientNode():
                 'status': 'executing'
             }
 
+    def disconnect(self):
+        '''desconecta'''
+        self.connected = False
+        self.stop_event.set()
+
+        try:
+            self.message_queue.join()
+        
+        except:
+            pass
+
+        if self.socket:
+            try:
+                self.socket.close()
+            except:
+                pass
+
+
     def start(self):
         '''inicia al cliente'''
         if not self.connect_to_server():
             return
         
+        self.connected = True
+
         # inicia hilos de seniales
         heartbeat_thread = threading.Thread(target=self.send_heartbeat)
         heartbeat_thread.daemon = True
@@ -216,7 +290,18 @@ if __name__ == "__main__":
 
     # Intenta reconectar si se pierde la conexion
     while(True):
-        client.start()
-        if not client.connected:
-            logging.info("Intentando reconectar en 10 seg ...")
+        try:
+            client.start()
+            if not client.connected:
+                logging.info("Intentando reconectar en 10 seg ...")
+                time.sleep(10)
+            
+        except KeyboardInterrupt:
+            logging.info("Cliente terminado por el usuario")
+            client.disconnect()
+            break
+        except Exception as e:
+            logging.error(f"Error inesperado {e}")
+            client.disconnect()
+            logging.info("Intentando reconectar en 10 segundos ...")
             time.sleep(10)
