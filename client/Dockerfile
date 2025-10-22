@@ -11,8 +11,11 @@ COPY client.py scrapper.py ./
 
 # Definir variables de entorno
 ENV PYTHONUNBUFFERED=1
-ENV SERVER_HOST=mi-scrp-server
+# Dejar SERVER_HOST sin definir para activar el autodescubrimiento
+# ENV SERVER_HOST=mi-scrp-server
 ENV SERVER_PORT=8080
+ENV BROADCAST_PORT=8081
+ENV AUTO_DISCOVERY=true
 
 # Comando para ejecutar la aplicación
 CMD ["python3", "client.py"]
