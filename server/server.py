@@ -2,6 +2,7 @@ import socket
 import threading
 import json
 import time
+import os
 from datetime import datetime
 import logging
 import struct
@@ -16,9 +17,10 @@ logging.basicConfig(
 )
 
 class CentralServer():
-    def __init__(self, host='0.0.0.0', port=8080) -> None:
+    def __init__(self, host='0.0.0.0', port=8080, broadcast_port=8081) -> None:
         self.host = host
         self.port = port
+        self.broadcast_port = broadcast_port
         self.clients = {}
         self.tasks = {}
         self.task_id_counter = 1
@@ -28,6 +30,12 @@ class CentralServer():
         self.server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.server_socket.bind((self.host, self.port))
         self.server_socket.listen(10)
+        
+        # Socket para broadcast
+        self.broadcast_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        # Permitir broadcast en este socket
+        self.broadcast_socket.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        self.broadcast_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
     
     def receive_messages(self, client_socket):
@@ -193,6 +201,29 @@ class CentralServer():
     def inspect_client(self, client):
         return self.clients[client]
     
+    def send_broadcast_signal(self):
+        '''Envia una señal de broadcast para que los clientes detecten al servidor'''
+        while self.running:
+            try:
+                broadcast_info = {
+                    'type': 'server_discovery',
+                    'server_host': self.host,
+                    'server_port': self.port,
+                    'time': datetime.now().isoformat()
+                }
+                broadcast_message = json.dumps(broadcast_info).encode()
+                
+                # Enviar a la dirección de broadcast en la red Docker (normalmente 255.255.255.255)
+                # Pero en Docker Swarm, envía a la dirección de broadcast de la red overlay
+                self.broadcast_socket.sendto(broadcast_message, ('255.255.255.255', self.broadcast_port))
+                self.log_event('BROADCAST', 'Señal de descubrimiento enviada')
+                
+                # Enviar señal cada 5 segundos
+                time.sleep(5)
+            except Exception as e:
+                self.log_event('ERROR', f"Error en envío de broadcast: {e}")
+                time.sleep(5)
+    
     def start_socket_server(self):
         '''inicia el servidor de sockets'''
         self.running = True
@@ -200,10 +231,15 @@ class CentralServer():
         self.log_event('SERVER_START', f"Servidor iniciado en {self.host}:{self.port}")
 
         try:
-
+            # Iniciar hilo para aceptar conexiones de clientes
             accept_thread = threading.Thread(target=self.accepts_conections)
             accept_thread.daemon = True
             accept_thread.start()
+            
+            # Iniciar hilo para enviar señales de broadcast
+            broadcast_thread = threading.Thread(target=self.send_broadcast_signal)
+            broadcast_thread.daemon = True
+            broadcast_thread.start()
 
             # hilo para los comandos
             while self.running:
@@ -213,6 +249,7 @@ class CentralServer():
             self.log_event('SERVER_STOP', 'Servidor detenido')
         finally:
             self.server_socket.close()
+            self.broadcast_socket.close()
 
     def accepts_conections(self):
         '''hilo para conexiones de clientes'''
@@ -238,54 +275,59 @@ class CentralServer():
                     self.log_event('ERORR', f"Error en comunicacion: {e}")
 
     def command_interface(self):
-        '''hilo para la interaccion con el usuario'''
-        help_text = '''Comandos disponibles: 
-        - "status": estado actual del sistema
-        - "clients": lista de clientes conectados
-        - "client IP": info sobre el cliente 
-        - "exit": cerrar servidor
-        - "help": mostrar esta ayuda\n
-        '''
+        # '''hilo para la interaccion con el usuario'''
+        # help_text = '''Comandos disponibles: 
+        # - "status": estado actual del sistema
+        # - "clients": lista de clientes conectados
+        # - "client IP": info sobre el cliente 
+        # - "exit": cerrar servidor
+        # - "help": mostrar esta ayuda\n
+        # '''
 
-        while self.running:
-            try:
-                print("\n>>> ", end='', flush=True)
-                user_input = input().strip().lower()
+        # while self.running:
+        #     try:
+        #         print("\n>>> ", end='', flush=True)
+        #         user_input = input().strip().lower()
 
-                if user_input == 'status':
-                    print(self.get_system_status())
-                elif user_input == 'clients':
-                    print('Clientes conectados:\n')
-                    for client in self.clients:
-                        print(client + '\n')
-                elif user_input == 'help':
-                    print(help_text)
-                elif user_input == 'exit':
-                    self.running = False
-                    try:
-                        self.server_socket.close()
-                        self.log_event('SERVER_STOP', 'Servidor detenido')
-                    except Exception as e:
-                        print(f"Error al cerrar el servidor: {e}")
-                elif len(user_input.split()) >= 2:
-                    parts = user_input.split()
-                    if parts[0] == 'client':
-                        print(self.inspect_client(parts[1]))
-                    elif parts[0] == 'assign':
-                        self.assign_tasks(parts[1], {'url': parts[2]})
-                elif user_input:
-                    print(f"Comando no reconocido: {user_input}")
+        #         if user_input == 'status':
+        #             print(self.get_system_status())
+        #         elif user_input == 'clients':
+        #             print('Clientes conectados:\n')
+        #             for client in self.clients:
+        #                 print(client + '\n')
+        #         elif user_input == 'help':
+        #             print(help_text)
+        #         elif user_input == 'exit':
+        #             self.running = False
+        #             try:
+        #                 self.server_socket.close()
+        #                 self.log_event('SERVER_STOP', 'Servidor detenido')
+        #             except Exception as e:
+        #                 print(f"Error al cerrar el servidor: {e}")
+        #         elif len(user_input.split()) >= 2:
+        #             parts = user_input.split()
+        #             if parts[0] == 'client':
+        #                 print(self.inspect_client(parts[1]))
+        #             elif parts[0] == 'assign':
+        #                 self.assign_tasks(parts[1], {'url': parts[2]})
+        #         elif user_input:
+        #             print(f"Comando no reconocido: {user_input}")
             
-            except KeyboardInterrupt:
-                pass
-            except Exception as e:
-                print(f"Error en interfaz de comandos: {e}")
+        #     except KeyboardInterrupt:
+        #         pass
+        #     except Exception as e:
+        #         print(f"Error en interfaz de comandos: {e}")
+        pass
 
                 
 
 if __name__ == "__main__":
-    server = CentralServer()
+    # Obtener la configuración desde variables de entorno
+    host = '0.0.0.0'
+    port = int(os.environ.get('SERVER_PORT', 8080))
+    broadcast_port = int(os.environ.get('BROADCAST_PORT', 8081))
+    
+    server = CentralServer(host=host, port=port, broadcast_port=broadcast_port)
 
     # iniciar servidor 
-    server.start_socket_server() 
-    print('asd')
+    server.start_socket_server()
