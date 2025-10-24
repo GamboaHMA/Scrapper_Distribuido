@@ -20,9 +20,10 @@ logging.basicConfig(
 )
 
 class ClientNode():
-    def __init__(self, server_host='0.0.0.0', server_port=8080) -> None:
+    def __init__(self, server_host=None, server_port=8080, broadcast_port=8081) -> None:
         self.server_host = server_host
         self.server_port = server_port
+        self.broadcast_port = broadcast_port
         self.client_id = None
         self.connected = False
         self.socket = None
@@ -36,7 +37,71 @@ class ClientNode():
         # Estado del cliente (disponible/ocupado)
         self.is_busy = False
         self.status_lock = threading.Lock()
+        # Servidores detectados
+        self.discovered_servers = set()
+        # Flag para auto-descubrimiento
+        self.auto_discovery = server_host is None
 
+    def listen_for_broadcasts(self):
+        '''Escucha señales de broadcast de los servidores'''
+        try:
+            # Crear socket para recibir broadcast
+            broadcast_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            # Permitir reutilización de direcciones
+            broadcast_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            # Enlazar a puerto de broadcast
+            broadcast_socket.bind(('', self.broadcast_port))
+            
+            logging.info(f"Escuchando señales de broadcast en puerto {self.broadcast_port}")
+            
+            while not self.connected and not self.stop_event.is_set():
+                try:
+                    # Configurar timeout para comprobar periódicamente si debemos detener
+                    broadcast_socket.settimeout(1.0)
+                    data, addr = broadcast_socket.recvfrom(1024)
+                    
+                    if data:
+                        try:
+                            # Decodificar mensaje
+                            message = json.loads(data.decode())
+                            if message.get('type') == 'server_discovery':
+                                server_host = message.get('server_host')
+                                server_port = message.get('server_port')
+                                
+                                # Si la dirección del broadcast es 0.0.0.0, usar la dirección del remitente
+                                if server_host == '0.0.0.0':
+                                    server_host = addr[0]
+                                
+                                server_info = (server_host, server_port)
+                                self.discovered_servers.add(server_info)
+                                logging.info(f"Servidor descubierto: {server_host}:{server_port}")
+                                
+                                # Conectar al primer servidor descubierto
+                                if not self.connected:
+                                    self.server_host = server_host
+                                    self.server_port = server_port
+                                    if self.connect_to_server():
+                                        break
+                        
+                        except json.JSONDecodeError:
+                            continue
+                        except Exception as e:
+                            logging.error(f"Error procesando broadcast: {e}")
+                            
+                except socket.timeout:
+                    continue
+                except Exception as e:
+                    logging.error(f"Error en escucha de broadcast: {e}")
+                    time.sleep(1)
+            
+        except Exception as e:
+            logging.error(f"Error inicializando escucha de broadcast: {e}")
+        finally:
+            try:
+                broadcast_socket.close()
+            except:
+                pass
+    
     def connect_to_server(self):
         '''conecta al servidor central'''
         try:
@@ -60,7 +125,8 @@ class ClientNode():
             return True
 
         except Exception as e:
-            logging.error(f"Error conectando aal servidor: {e}")
+            logging.error(f"Error conectando al servidor: {e}")
+            self.connected = False
             return False
         
     def _send_worker(self):
@@ -302,8 +368,28 @@ class ClientNode():
 
     def start(self):
         '''inicia al cliente'''
-        if not self.connect_to_server():
-            return
+        # Si estamos en modo autodescubrimiento, intentar descubrir servidores
+        if self.auto_discovery:
+            logging.info("Modo autodescubrimiento activado. Buscando servidores...")
+            # Iniciar hilo de escucha de broadcast en modo no bloqueante
+            discovery_thread = threading.Thread(target=self.listen_for_broadcasts)
+            discovery_thread.daemon = True
+            discovery_thread.start()
+            
+            # Esperar a que se detecte un servidor y se conecte
+            max_wait = 30  # Esperar hasta 30 segundos
+            wait_time = 0
+            while not self.connected and wait_time < max_wait:
+                time.sleep(1)
+                wait_time += 1
+                
+            if not self.connected:
+                logging.error("No se encontró ningún servidor después de esperar")
+                return
+        else:
+            # Modo directo, intentar conectar al servidor configurado
+            if not self.connect_to_server():
+                return
         
         self.connected = True
         
@@ -325,16 +411,23 @@ class ClientNode():
 
 if __name__ == "__main__":
     # Obtener la configuración del servidor desde variables de entorno
-    server_host = os.environ.get('SERVER_HOST', '0.0.0.0')
+    server_host = os.environ.get('SERVER_HOST', None)
     server_port = int(os.environ.get('SERVER_PORT', 8080))
+    broadcast_port = int(os.environ.get('BROADCAST_PORT', 8081))
+    auto_discovery = os.environ.get('AUTO_DISCOVERY', 'true').lower() == 'true'
     
-    logging.info(f"Intentando conectar al servidor {server_host}:{server_port}")
+    # Si auto_discovery está activado y no se especificó un SERVER_HOST, usar None para activar autodescubrimiento
+    if auto_discovery and not server_host:
+        logging.info("Modo autodescubrimiento activado, buscando servidores automáticamente")
+        server_host = None
+    elif server_host:
+        logging.info(f"Modo directo, intentando conectar al servidor {server_host}:{server_port}")
     
     # Crear el cliente con la configuración del servidor
-    client = ClientNode(server_host=server_host, server_port=server_port)
+    client = ClientNode(server_host=server_host, server_port=server_port, broadcast_port=broadcast_port)
 
     # Intenta reconectar si se pierde la conexion
-    while(True):
+    while True:
         try:
             client.start()
             if not client.connected:
