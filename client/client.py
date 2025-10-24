@@ -34,6 +34,9 @@ class ClientNode():
         self.stop_event = threading.Event()
         # hilo de envio 
         self.send_thread = None
+        # Estado del cliente (disponible/ocupado)
+        self.is_busy = False
+        self.status_lock = threading.Lock()
         # Servidores detectados
         self.discovered_servers = set()
         # Flag para auto-descubrimiento
@@ -194,6 +197,14 @@ class ClientNode():
             except Exception:
                 self.connected = False
 
+    def update_busy_status(self, is_busy):
+        '''Actualiza el estado de ocupación y notifica al servidor'''
+        with self.status_lock:
+            self.is_busy = is_busy
+            status = 'busy' if is_busy else 'available'
+            self.send_status(status)
+            logging.info(f"Estado actualizado: {status}")
+    
     def send_status(self, status):
         '''envia estado al servidor'''
         try:
@@ -201,6 +212,7 @@ class ClientNode():
                 'type': 'status',
                 'client_id': self.client_id,
                 'status': status,
+                'is_busy': self.is_busy,
                 'time_now': datetime.now().isoformat()
             }
 
@@ -213,10 +225,13 @@ class ClientNode():
         '''ejecuta la tarea asignada'''
         logging.info(f"Ejecutando tarea {task_id}: {task_data}")
         
+        # Marcar al cliente como ocupado
+        self.update_busy_status(True)
+        
         result = None
         try:
             # Verificar que task_data tiene formato adecuado
-            if not isinstance(task_data, dict) or 'url' not in task_data:
+            if not isinstance(task_data, dict) or 'url' not in task_data: #la task tiene q tener la url a scrapear
                 raise Exception("Formato de tarea inválido, se espera diccionario con campo 'url'")
                 
             url = task_data['url']
@@ -226,11 +241,12 @@ class ClientNode():
             scrape_result = get_html_from_url(url)
             
             # Preparar resultado para enviar al servidor
+            # NOTE: CAMBIAR SI SE DESEA OTRA INFO
             result = {
                 'url': scrape_result['url'],
-                'html_length': len(scrape_result['html']),
-                'links_count': len(scrape_result['links']),
-                'links': scrape_result['links'][:10],  # Enviar solo los primeros 10 enlaces
+                'html_length': len(scrape_result['html']), #longitud del html
+                'links_count': len(scrape_result['links']), #cant de links encontrados
+                'links': scrape_result['links'][:10],  # solo primeros 10 enlaces
                 'status': 'success'
             }
             
@@ -260,6 +276,9 @@ class ClientNode():
         else:
             logging.error(f"Error al encolar resultados de tarea {task_id}")
             self.connected = False
+            
+        # Marcar al cliente como disponible nuevamente
+        self.update_busy_status(False)
         
         
     def listen_for_tasks(self):
@@ -292,7 +311,20 @@ class ClientNode():
             task_data = message.get('task_data')
 
             logging.info(f"Nueva tarea recibida: {task_id}")
-
+            
+            # Verificar si estoy ocupado
+            if self.is_busy:
+                logging.warning(f"Rechazando tarea {task_id} porque el cliente está ocupado")
+                # Informar al servidor que no podemos aceptar esta tarea
+                rejection_msg = {
+                    'type': 'task_rejected',
+                    'client_id': self.client_id,
+                    'task_id': task_id,
+                    'reason': 'client_busy'
+                }
+                self._enqueue_message(rejection_msg)
+                return
+                
             # ejecuta la tarea en un hilo separado
             task_thread = threading.Thread(
                 target=self.execute_task,
@@ -306,6 +338,15 @@ class ClientNode():
                 'started_at': datetime.now().isoformat(),
                 'status': 'executing'
             }
+            
+            # Confirmacion de aceptacion de tarea
+            acceptance_msg = {
+                'type': 'task_accepted',
+                'client_id': self.client_id,
+                'task_id': task_id,
+                'time_now': datetime.now().isoformat()
+            }
+            self._enqueue_message(acceptance_msg)
 
     def disconnect(self):
         '''desconecta'''
@@ -350,14 +391,19 @@ class ClientNode():
             if not self.connect_to_server():
                 return
         
-        # Si llegamos aquí es que estamos conectados
-        # inicia hilos de seniales
+        self.connected = True
+        
+        # Inicializar como disponible
+        with self.status_lock:
+            self.is_busy = False
+
+        # inicia hilos de señales
         heartbeat_thread = threading.Thread(target=self.send_heartbeat)
         heartbeat_thread.daemon = True
         heartbeat_thread.start()
 
         # envia el estado inicial
-        self.send_status('Conectado y listo')
+        self.send_status('available')
 
         self.listen_for_tasks()
 
