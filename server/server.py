@@ -140,6 +140,34 @@ class CentralServer():
                 print('Clientes conectados:\n')
                 for client in self.clients:
                     print(client + '\n')
+            elif message.get('data')[0] == 'tasks':
+                # Nuevo comando para obtener las tareas y sus resultados
+                tasks_info = {}
+                for task_id, task in self.tasks.items():
+                    tasks_info[task_id] = {
+                        'id': task['id'],
+                        'client_id': task.get('client_id'),
+                        'data': task.get('data'),
+                        'status': task.get('status'),
+                        'assigned_at': task.get('assigned_at'),
+                        'completed_at': task.get('completed_at'),
+                        'result': task.get('result')
+                    }
+                
+                # Enviar respuesta de vuelta al cliente API
+                response_msg = {
+                    'type': 'tasks_response',
+                    'tasks': tasks_info,
+                    'timestamp': datetime.now().isoformat()
+                }
+                
+                try:
+                    response_json = json.dumps(response_msg).encode()
+                    length = len(response_json)
+                    self.clients[client_id]['socket'].send(length.to_bytes(2, 'big'))
+                    self.clients[client_id]['socket'].send(response_json)
+                except Exception as e:
+                    self.log_event('ERROR', f'Error enviando respuesta de tareas: {e}', client_id)
 
         elif msg_type == 'task_result':
             task_id = message.get('task_id')
@@ -238,6 +266,7 @@ class CentralServer():
         client_id = available_clients[0]
         return self.assign_tasks(client_id, task_data, task_id)
     
+    # TODO: Cuando hay tareas en cola y no hay clientes disponibles, asignar tareas cuando un cliente se libere
     def assign_tasks(self, client_id, task_data, task_id=None):
         '''asigna una tarea a un cliente especifico'''
         if client_id not in self.clients:
