@@ -185,6 +185,46 @@ class CentralServer():
                     # Si el cliente acaba de volverse disponible, intentar asignar tareas pendientes
                     if not is_busy and status == 'available' and self.pending_tasks:
                         self.process_pending_tasks()
+        
+        elif msg_type == 'get_logs':
+            # Nuevo: Enviar logs al cliente que los solicita
+            try:
+                logs_response = {
+                    'type': 'logs_response',
+                    'logs': self.log_entries[-50:],  # Últimos 50 logs
+                    'timestamp': datetime.now().isoformat()
+                }
+                response_bytes = json.dumps(logs_response).encode()
+                length = len(response_bytes)
+                
+                # Enviar usando el protocolo del servidor
+                if client_id in self.clients:
+                    client_socket = self.clients[client_id]['socket']
+                    client_socket.send(length.to_bytes(2, 'big'))
+                    client_socket.send(response_bytes)
+                    
+            except Exception as e:
+                self.log_event('ERROR', f"Error enviando logs: {e}", client_id)
+        
+        elif msg_type == 'get_status':
+            # Nuevo: Enviar estado del sistema al cliente que lo solicita
+            try:
+                status_response = {
+                    'type': 'status_response',
+                    'status': self.get_system_status(),
+                    'timestamp': datetime.now().isoformat()
+                }
+                response_bytes = json.dumps(status_response).encode()
+                length = len(response_bytes)
+                
+                # Enviar usando el protocolo del servidor
+                if client_id in self.clients:
+                    client_socket = self.clients[client_id]['socket']
+                    client_socket.send(length.to_bytes(2, 'big'))
+                    client_socket.send(response_bytes)
+                    
+            except Exception as e:
+                self.log_event('ERROR', f"Error enviando estado: {e}", client_id)
 
     def get_available_clients(self):
         '''Obtener la lista de clientes disponibles'''
@@ -238,6 +278,7 @@ class CentralServer():
         client_id = available_clients[0]
         return self.assign_tasks(client_id, task_data, task_id)
     
+    # TODO: Cuando hay tareas en cola y no hay clientes disponibles, asignar tareas cuando un cliente se libere
     def assign_tasks(self, client_id, task_data, task_id=None):
         '''asigna una tarea a un cliente especifico'''
         if client_id not in self.clients:
