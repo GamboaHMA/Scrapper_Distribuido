@@ -98,6 +98,73 @@ class ServerConnector:
         
         return self.send_message(command_msg)
     
+    def send_status_command(self):
+        """Solicita el estado del servidor"""
+        command_msg = {
+            'type': 'command',
+            'data': ['status'],
+            'client_id': 'api_client',
+            'timestamp': datetime.now().isoformat()
+        }
+        
+        return self.send_message(command_msg)
+    
+    def send_clients_command(self):
+        """Solicita la lista de clientes del servidor"""
+        command_msg = {
+            'type': 'command',
+            'data': ['clients'],
+            'client_id': 'api_client',
+            'timestamp': datetime.now().isoformat()
+        }
+        
+        return self.send_message(command_msg)
+    
+    def get_tasks_from_server(self):
+        """Obtiene las tareas y sus resultados del servidor"""
+        if not self.connected:
+            if not self.connect():
+                return None
+        
+        try:
+            # Enviar comando para obtener tareas
+            tasks_msg = {
+                'type': 'command',
+                'data': ['tasks'],
+                'client_id': 'api_client',
+                'timestamp': datetime.now().isoformat()
+            }
+            
+            message_bytes = json.dumps(tasks_msg).encode()
+            length = len(message_bytes)
+            self.socket.send(length.to_bytes(2, 'big'))
+            self.socket.send(message_bytes)
+            
+            # Recibir respuesta
+            response_length_bytes = self.socket.recv(2)
+            if not response_length_bytes:
+                return None
+            
+            response_length = int.from_bytes(response_length_bytes, 'big')
+            response_data = b""
+            while len(response_data) < response_length:
+                chunk = self.socket.recv(min(1024, response_length - len(response_data)))
+                if not chunk:
+                    break
+                response_data += chunk
+            
+            if len(response_data) == response_length:
+                response = json.loads(response_data.decode())
+                if response.get('type') == 'tasks_response':
+                    return response.get('tasks', {})
+            
+            return None
+            
+        except Exception as e:
+            logging.error(f"Error obteniendo tareas del servidor: {e}")
+            self.connected = False
+            return None
+    
     def get_server_logs(self):
         """Obtiene los logs del servidor principal"""
         if not self.connected:
@@ -339,6 +406,55 @@ def get_api_status():
         api_status['server_status'] = server_status
     
     return jsonify(api_status)
+
+@app.route('/api/tasks', methods=['GET'])
+def get_tasks():
+    """Endpoint para obtener todas las tareas y sus resultados"""
+    try:
+        tasks = server_connector.get_tasks_from_server()
+        
+        if tasks is None:
+            return jsonify({
+                'status': 'error',
+                'message': 'No se pudo obtener las tareas del servidor',
+                'server_connected': server_connector.connected,
+                'tasks': {},
+                'suggestion': 'Verificar que el servidor principal esté corriendo'
+            }), 503
+        
+        # Procesar y formatear las tareas para el frontend
+        formatted_tasks = []
+        for task_id, task in tasks.items():
+            formatted_task = {
+                'id': task.get('id', task_id),
+                'url': task.get('data', {}).get('url', 'URL no disponible'),
+                'client_id': task.get('client_id', 'N/A'),
+                'status': task.get('status', 'unknown'),
+                'assigned_at': task.get('assigned_at'),
+                'completed_at': task.get('completed_at'),
+                'result': task.get('result')
+            }
+            formatted_tasks.append(formatted_task)
+        
+        # Ordenar por fecha de asignación (más recientes primero)
+        formatted_tasks.sort(key=lambda x: x.get('assigned_at', ''), reverse=True)
+        
+        return jsonify({
+            'status': 'success',
+            'tasks': formatted_tasks,
+            'total_tasks': len(formatted_tasks),
+            'completed_tasks': len([t for t in formatted_tasks if t['status'] == 'completed']),
+            'pending_tasks': len([t for t in formatted_tasks if t['status'] == 'assigned']),
+            'timestamp': datetime.now().isoformat()
+        })
+        
+    except Exception as e:
+        logging.error(f"Error en endpoint /api/tasks: {e}")
+        return jsonify({
+            'status': 'error',
+            'message': f'Error interno: {str(e)}',
+            'tasks': []
+        }), 500
 
 @app.route('/api/logs', methods=['GET'])
 def get_logs():

@@ -165,12 +165,134 @@
         }
 
         .logs-section {
-            grid-column: 1 / -1;
+            grid-column: span 2;
+        }
+        
+        .results-section {
+            grid-column: span 2;
+        }
+        
+        .results-controls {
+            margin-bottom: 15px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        
+        .results-stats {
+            color: #888;
+            font-size: 0.9em;
+        }
+        
+        .results-container {
             max-height: 400px;
             overflow-y: auto;
+            border: 1px solid #333;
+            border-radius: 8px;
+            background: #1a1a1a;
+        }
+        
+        .result-item {
+            padding: 15px;
+            border-bottom: 1px solid #333;
+            transition: background-color 0.3s;
+            color: #e0e0e0; /* Texto claro para items de resultado */
+        }
+        
+        .result-item:hover {
+            background-color: #2a2a2a;
+        }
+        
+        .result-item:last-child {
+            border-bottom: none;
+        }
+        
+        .result-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+        
+        .result-url {
+            font-weight: bold;
+            color: #4CAF50;
+            word-break: break-all;
+            flex: 1;
+            margin-right: 15px;
+        }
+        
+        .result-status {
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 0.8em;
+            font-weight: bold;
+        }
+        
+        .result-status.completed {
+            background-color: #4CAF50;
+            color: white;
+        }
+        
+        .result-status.failed {
+            background-color: #f44336;
+            color: white;
+        }
+        
+        .result-status.pending {
+            background-color: #ff9800;
+            color: white;
+        }
+        
+        .result-content {
+            background: #0f0f0f;
+            border: 1px solid #333;
+            border-radius: 4px;
+            padding: 10px;
+            max-height: 200px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 0.85em;
+            line-height: 1.4;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            color: #e0e0e0; /* Texto claro sobre fondo oscuro */
         }
 
-        .log-entry {
+        /* Estilos adicionales para elementos dentro del resultado */
+        .result-content .result-key {
+            color: #4CAF50;
+            font-weight: bold;
+        }
+
+        .result-content .result-value {
+            color: #e0e0e0;
+        }
+
+        .result-content .result-error {
+            color: #ff6b6b;
+        }
+
+        .result-content .result-url-link {
+            color: #64b5f6;
+            text-decoration: underline;
+        }
+        
+        .result-metadata {
+            margin-top: 10px;
+            font-size: 0.8em;
+            color: #888;
+            display: flex;
+            gap: 15px;
+            flex-wrap: wrap;
+        }
+        
+        .no-results {
+            text-align: center;
+            padding: 40px 20px;
+            color: #888;
+        }        .log-entry {
             padding: 12px;
             margin-bottom: 8px;
             border-radius: 6px;
@@ -337,6 +459,26 @@
                     </form>
                 </div>
 
+                <!-- Resultados de Scrapping -->
+                <div class="card results-section">
+                    <h3>📄 Resultados de Scrapping</h3>
+                    <div class="results-controls">
+                        <button class="btn" onclick="loadTasks()" style="width: auto; padding: 8px 15px; margin-bottom: 15px;">
+                            🔄 Actualizar Resultados
+                        </button>
+                        <div class="results-stats">
+                            <span>Total de tareas: <strong id="totalTasks">0</strong></span>
+                            <span style="margin-left: 20px;">Completadas: <strong id="completedTasks">0</strong></span>
+                        </div>
+                    </div>
+                    <div id="resultsContainer" class="results-container">
+                        <div class="no-results">
+                            <p>🔍 No hay resultados de scrapping disponibles</p>
+                            <p style="color: #888; font-size: 0.9em;">Los resultados aparecerán aquí una vez que se procesen las URLs</p>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- Logs -->
                 <div class="card logs-section">
                     <h3>📊 Logs de Actividad</h3>
@@ -383,6 +525,145 @@
             document.getElementById('totalRequests').textContent = stats.totalRequests;
             document.getElementById('successfulRequests').textContent = stats.successfulRequests;
             document.getElementById('failedRequests').textContent = stats.failedRequests;
+        }
+
+        // Función para cargar tareas y resultados
+        async function loadTasks() {
+            try {
+                const response = await fetch(`${API_BASE_URL}/api/tasks`);
+                const data = await response.json();
+                
+                if (response.ok && data.status === 'success') {
+                    displayTasks(data.tasks);
+                    updateTaskStats(data.tasks);
+                    addLog(`📋 Cargadas ${data.tasks.length} tareas`, 'info');
+                } else {
+                    throw new Error(data.message || 'Error cargando tareas');
+                }
+            } catch (error) {
+                addLog(`❌ Error cargando tareas: ${error.message}`, 'error');
+                displayNoResults('Error al cargar resultados');
+            }
+        }
+
+        // Función para mostrar las tareas en el dashboard
+        function displayTasks(tasks) {
+            const container = document.getElementById('resultsContainer');
+            
+            if (!tasks || tasks.length === 0) {
+                displayNoResults('No hay tareas de scrapping disponibles');
+                return;
+            }
+
+            let html = '';
+            tasks.forEach((task, index) => {
+                const status = task.result ? 'completed' : (task.assigned_to ? 'pending' : 'pending');
+                const statusText = task.result ? 'Completado' : 'Pendiente';
+                
+                html += `
+                    <div class="result-item">
+                        <div class="result-header">
+                            <div class="result-url">${task.url}</div>
+                            <div class="result-status ${status}">${statusText}</div>
+                        </div>
+                        ${task.result ? `
+                            <div class="result-content">${formatResultContent(task.result)}</div>
+                        ` : `
+                            <div style="color: #888; font-style: italic;">
+                                ${task.assigned_to ? `Asignado a: ${task.assigned_to}` : 'Esperando asignación...'}
+                            </div>
+                        `}
+                        <div class="result-metadata">
+                            <span>📅 ID: ${task.id}</span>
+                            ${task.assigned_to ? `<span>👤 Cliente: ${task.assigned_to}</span>` : ''}
+                            <span>🕒 ${new Date().toLocaleString()}</span>
+                        </div>
+                    </div>
+                `;
+            });
+            
+            container.innerHTML = html;
+        }
+
+        // Función para formatear el contenido del resultado
+        function formatResultContent(result) {
+            if (!result) {
+                return '<span class="result-error">Sin resultado disponible</span>';
+            }
+            
+            if (typeof result === 'string') {
+                // Si es una cadena muy larga, truncar
+                if (result.length > 1000) {
+                    return result.substring(0, 1000) + '\n\n<span class="result-error">... (contenido truncado)</span>';
+                }
+                return result;
+            } else if (typeof result === 'object') {
+                // Si es un objeto, formatear de manera más legible
+                let formatted = '';
+                
+                // Manejar casos específicos
+                if (result.status) {
+                    if (result.status === 'success') {
+                        formatted += `<span class="result-key">Estado:</span> <span class="result-value">✅ Exitoso</span>\n`;
+                    } else if (result.status === 'error') {
+                        formatted += `<span class="result-key">Estado:</span> <span class="result-error">❌ Error</span>\n`;
+                    }
+                }
+                
+                if (result.url) {
+                    formatted += `<span class="result-key">URL:</span> <span class="result-url-link">${result.url}</span>\n`;
+                }
+                
+                if (result.html_length) {
+                    formatted += `<span class="result-key">Tamaño HTML:</span> <span class="result-value">${result.html_length} caracteres</span>\n`;
+                }
+                
+                if (result.links_count) {
+                    formatted += `<span class="result-key">Enlaces encontrados:</span> <span class="result-value">${result.links_count}</span>\n`;
+                }
+                
+                if (result.links && result.links.length > 0) {
+                    formatted += `<span class="result-key">Primeros enlaces:</span>\n`;
+                    result.links.slice(0, 5).forEach(link => {
+                        formatted += `  • <span class="result-url-link">${link}</span>\n`;
+                    });
+                    if (result.links.length > 5) {
+                        formatted += `  ... y ${result.links.length - 5} más\n`;
+                    }
+                }
+                
+                if (result.error) {
+                    formatted += `<span class="result-key">Error:</span> <span class="result-error">${result.error}</span>\n`;
+                }
+                
+                // Si no hay campos específicos reconocidos, mostrar JSON formateado
+                if (!formatted) {
+                    formatted = JSON.stringify(result, null, 2);
+                }
+                
+                return formatted;
+            }
+            return String(result);
+        }
+
+        // Función para mostrar mensaje cuando no hay resultados
+        function displayNoResults(message = 'No hay resultados de scrapping disponibles') {
+            const container = document.getElementById('resultsContainer');
+            container.innerHTML = `
+                <div class="no-results">
+                    <p>🔍 ${message}</p>
+                    <p style="color: #888; font-size: 0.9em;">Los resultados aparecerán aquí una vez que se procesen las URLs</p>
+                </div>
+            `;
+        }
+
+        // Función para actualizar estadísticas de tareas
+        function updateTaskStats(tasks) {
+            const totalTasks = tasks.length;
+            const completedTasks = tasks.filter(task => task.result).length;
+            
+            document.getElementById('totalTasks').textContent = totalTasks;
+            document.getElementById('completedTasks').textContent = completedTasks;
         }
 
         // Función para verificar estado de la API
@@ -448,6 +729,8 @@
                     stats.successfulRequests++;
                     addLog(`✅ URL enviada exitosamente: ${url}`, 'success');
                     urlInput.value = '';
+                    // Recargar tareas después de 2 segundos
+                    setTimeout(loadTasks, 2000);
                 } else {
                     stats.failedRequests++;
                     addLog(`❌ Error enviando URL: ${data.message || 'Error desconocido'}`, 'error');
@@ -516,6 +799,8 @@
                     
                     addLog(`✅ Lote procesado: ${successful} exitosos, ${failed} fallidos`, 'success');
                     urlsTextarea.value = '';
+                    // Recargar tareas después de 2 segundos
+                    setTimeout(loadTasks, 2000);
                 } else {
                     stats.failedRequests++;
                     addLog(`❌ Error enviando lote: ${data.message || 'Error desconocido'}`, 'error');
@@ -537,9 +822,13 @@
             addLog('🚀 Dashboard iniciado', 'info');
             checkStatus();
             updateStats();
+            loadTasks();
             
             // Verificar estado cada 30 segundos
             setInterval(checkStatus, 30000);
+            
+            // Cargar tareas cada 15 segundos
+            setInterval(loadTasks, 15000);
         });
     </script>
 </body>

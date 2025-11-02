@@ -140,6 +140,34 @@ class CentralServer():
                 print('Clientes conectados:\n')
                 for client in self.clients:
                     print(client + '\n')
+            elif message.get('data')[0] == 'tasks':
+                # Nuevo comando para obtener las tareas y sus resultados
+                tasks_info = {}
+                for task_id, task in self.tasks.items():
+                    tasks_info[task_id] = {
+                        'id': task['id'],
+                        'client_id': task.get('client_id'),
+                        'data': task.get('data'),
+                        'status': task.get('status'),
+                        'assigned_at': task.get('assigned_at'),
+                        'completed_at': task.get('completed_at'),
+                        'result': task.get('result')
+                    }
+                
+                # Enviar respuesta de vuelta al cliente API
+                response_msg = {
+                    'type': 'tasks_response',
+                    'tasks': tasks_info,
+                    'timestamp': datetime.now().isoformat()
+                }
+                
+                try:
+                    response_json = json.dumps(response_msg).encode()
+                    length = len(response_json)
+                    self.clients[client_id]['socket'].send(length.to_bytes(2, 'big'))
+                    self.clients[client_id]['socket'].send(response_json)
+                except Exception as e:
+                    self.log_event('ERROR', f'Error enviando respuesta de tareas: {e}', client_id)
 
         elif msg_type == 'task_result':
             task_id = message.get('task_id')
@@ -185,46 +213,6 @@ class CentralServer():
                     # Si el cliente acaba de volverse disponible, intentar asignar tareas pendientes
                     if not is_busy and status == 'available' and self.pending_tasks:
                         self.process_pending_tasks()
-        
-        elif msg_type == 'get_logs':
-            # Nuevo: Enviar logs al cliente que los solicita
-            try:
-                logs_response = {
-                    'type': 'logs_response',
-                    'logs': self.log_entries[-50:],  # Últimos 50 logs
-                    'timestamp': datetime.now().isoformat()
-                }
-                response_bytes = json.dumps(logs_response).encode()
-                length = len(response_bytes)
-                
-                # Enviar usando el protocolo del servidor
-                if client_id in self.clients:
-                    client_socket = self.clients[client_id]['socket']
-                    client_socket.send(length.to_bytes(2, 'big'))
-                    client_socket.send(response_bytes)
-                    
-            except Exception as e:
-                self.log_event('ERROR', f"Error enviando logs: {e}", client_id)
-        
-        elif msg_type == 'get_status':
-            # Nuevo: Enviar estado del sistema al cliente que lo solicita
-            try:
-                status_response = {
-                    'type': 'status_response',
-                    'status': self.get_system_status(),
-                    'timestamp': datetime.now().isoformat()
-                }
-                response_bytes = json.dumps(status_response).encode()
-                length = len(response_bytes)
-                
-                # Enviar usando el protocolo del servidor
-                if client_id in self.clients:
-                    client_socket = self.clients[client_id]['socket']
-                    client_socket.send(length.to_bytes(2, 'big'))
-                    client_socket.send(response_bytes)
-                    
-            except Exception as e:
-                self.log_event('ERROR', f"Error enviando estado: {e}", client_id)
 
     def get_available_clients(self):
         '''Obtener la lista de clientes disponibles'''
