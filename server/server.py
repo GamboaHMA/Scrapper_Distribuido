@@ -6,6 +6,7 @@ import os
 from datetime import datetime
 import logging
 import struct
+import sqlite3
 
 logging.basicConfig(
     level=logging.INFO,
@@ -39,6 +40,38 @@ class CentralServer():
         # Permitir broadcast en este socket
         self.broadcast_socket.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
         self.broadcast_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+
+        # con la base de datos
+        self.cursor = None
+        self.create_data_base()
+
+    def create_data_base(self, nombre_data_base="database.db"):
+        if not os.path.exists(nombre_data_base):
+            print(f"Creando nueva base de datos: {nombre_data_base}")
+
+            with sqlite3.connect(nombre_data_base) as conn:
+                self.conn = conn
+                self.cursor = conn.cursor()
+
+            self.cursor.execute('''
+                CREATE TABLE IF NOT EXISTS users(
+                    id TEXT PRIMARY KEY,
+                    socket TEXT NOT NULL,
+                    address TEXT NOT NULL,
+                    connected_at TEXT NOT NULL,
+                    status TEXT DEFAULT 'connected', 
+                    user_status TEXT DEFAULT 'unknow',
+                    is_busy INTEGER DEFAULT 0,
+                    last_heart_beat TEXT DEFAULT 'none'
+                )
+            ''')
+
+        else:
+            print(f"Conectando a base de datos existente: {nombre_data_base}")
+
+            with sqlite3.connect(nombre_data_base) as conn:
+                self.cursor = conn.cursor()
+
 
     
     def receive_messages(self, client_socket):
@@ -89,6 +122,16 @@ class CentralServer():
                     'client_status': 'unknown',
                     'is_busy': False
                 }
+
+                # con la base de datos
+                try:
+                    self.cursor.execute('''
+                        INSERT INTO users (id, socket, address, connected_at)
+                        VALUES (?, ?, ?, ?)
+                    ''', (f"{client_address[0]}:{client_address[1]}", client_socket, client_address, datetime.now().isoformat()))
+                except sqlite3.Error as e:
+                    print(f"Error al insertar nuevo usuario {client_id} en nueva conexion: {e}")
+
             self.log_event('CONNECTION', "Cliente conectado", client_id)
 
             # envia ID al cliente 
@@ -117,6 +160,22 @@ class CentralServer():
             # limpia cliente desconectado
             if client_id in self.clients:
                 del self.clients[client_id]
+
+            # con la base de datos
+            try:
+                self.cursor.execute(
+                    'UPDATE users SET status = disconnected WHERE id = ?',
+                    (client_id)
+                )
+                self.conn.commit()
+
+                if self.cursor.rowcount > 0:
+                    print(f"Actualizado status de {client_id} a disconnected")
+                else:
+                    print(f"Usuario {client_id} no encontrado")
+            except sqlite3.Error as e:
+                print(f"Error al actualizar status: {e}")
+
             client_socket.close()
             self.log_event('DISCONNECTION', 'Cliente desconectado', client_id)
 
@@ -127,6 +186,22 @@ class CentralServer():
         if msg_type == 'heartbeat':
             self.clients[client_id]['last_heartbeat'] = datetime.now().isoformat()
             self.clients[client_id]['status'] = 'active'
+
+            # con la base de datos
+            try:
+                self.cursor.execute(
+                    'UPDATE users SET last_heart_beat = ? WHERE id = ?', 
+                    (datetime.now().isoformat(), client_id)
+                )
+                self.conn.commit()
+
+                if self.cursor.rowcount > 0:
+                    print(f"Actualizado ultimo latido de {client_id}")
+                else:
+                    print(f"Usuario {client_id} no encontrado en la db para actualizar ultimo latido")
+            except sqlite3.Error as e:
+                print(f"Error al actualizar ultimo latido de usuario {client_id}: {e}")
+
             self.log_event('PING', "Recibiendo ping", client_id)
 
         elif msg_type == 'command':
@@ -140,6 +215,23 @@ class CentralServer():
                 print('Clientes conectados:\n')
                 for client in self.clients:
                     print(client + '\n')
+                
+                # con la base de datos
+                self.cursor.execute('SELECT * FROM users')
+                users = self.cursor.fetchall()
+
+                print("=== Todos los usuarios ===")
+                for i, user in enumerate(users, 1):
+                    print(f"\n--- Usuario #{i} ---")
+                    print(f"ID: {user['id']}")
+                    print(f"Socket: {user['socket']}")
+                    print(f"Address: {user['address']}")
+                    print(f"Connected at: {user['connected_at']}")
+                    print(f"Status: {user['status']}")
+                    print(f"User status: {user['user_status']}")
+                    print(f"Is busy: {'Si' if user['is_busy'] else 'No'}")
+                    print(f"Ultimo latido: {user['last_heart_beat']}")
+                    
 
         elif msg_type == 'task_result':
             task_id = message.get('task_id')
