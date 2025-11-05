@@ -100,7 +100,7 @@ class CentralServer():
             client_socket.send(json.dumps(welcome_msg).encode())
 
             while(True):
-                # recibe datos eviados por cliente
+                # recibe datos enviados por cliente
                 message = self.receive_messages(client_socket)
                 if not message:
                     break
@@ -140,6 +140,34 @@ class CentralServer():
                 print('Clientes conectados:\n')
                 for client in self.clients:
                     print(client + '\n')
+            elif message.get('data')[0] == 'tasks':
+                # Nuevo comando para obtener las tareas y sus resultados
+                tasks_info = {}
+                for task_id, task in self.tasks.items():
+                    tasks_info[task_id] = {
+                        'id': task['id'],
+                        'client_id': task.get('client_id'),
+                        'data': task.get('data'),
+                        'status': task.get('status'),
+                        'assigned_at': task.get('assigned_at'),
+                        'completed_at': task.get('completed_at'),
+                        'result': task.get('result')
+                    }
+                
+                # Enviar respuesta de vuelta al cliente API
+                response_msg = {
+                    'type': 'tasks_response',
+                    'tasks': tasks_info,
+                    'timestamp': datetime.now().isoformat()
+                }
+                
+                try:
+                    response_json = json.dumps(response_msg).encode()
+                    length = len(response_json)
+                    self.clients[client_id]['socket'].send(length.to_bytes(2, 'big'))
+                    self.clients[client_id]['socket'].send(response_json)
+                except Exception as e:
+                    self.log_event('ERROR', f'Error enviando respuesta de tareas: {e}', client_id)
 
         elif msg_type == 'task_result':
             task_id = message.get('task_id')
@@ -151,26 +179,34 @@ class CentralServer():
                 self.tasks[task_id]['result'] = result
                 self.tasks[task_id]['completed_at'] = datetime.now().isoformat()
             
-            # Verificar si hay tareas pendientes que asignar
-            self.process_pending_tasks()
+            # Marcar cliente como disponible inmediatamente
+            with self.clients_lock:
+                if client_id in self.clients:
+                    self.clients[client_id]['client_status'] = 'available'
+                    self.clients[client_id]['is_busy'] = False
+                    if 'assigned_task' in self.clients[client_id]:
+                        del self.clients[client_id]['assigned_task']
+                    self.log_event('STATUS_AUTO', f"Cliente marcado como disponible tras completar tarea {task_id}", client_id)
 
         elif msg_type == 'task_accepted':
             task_id = message.get('task_id')
             self.log_event('TASK_ACCEPTED', f"Tarea {task_id} aceptada", client_id)
+            
+            # Si el cliente no estaba marcado como ocupado, marcarlo ahora
+            with self.clients_lock:
+                if client_id in self.clients:
+                    self.clients[client_id]['is_busy'] = True
+                    self.clients[client_id]['client_status'] = 'busy'
+                    self.clients[client_id]['assigned_task'] = task_id
             
         elif msg_type == 'task_rejected':
             task_id = message.get('task_id')
             reason = message.get('reason')
             self.log_event('TASK_REJECTED', f"Tarea {task_id} rechazada. Razón: {reason}", client_id)
             
-            # Si la tarea fue rechazada, intentar asignarla a otro cliente
+            # Si la tarea fue rechazada, establecer como pendiente
             if task_id in self.tasks:
-                task_data = self.tasks[task_id]['data']
-                self.log_event('TASK_REASSIGN', f"Reasignando tarea {task_id}", client_id)
-                # Eliminar la asignación anterior
                 self.tasks[task_id]['status'] = 'pending'
-                # Intentar asignar a otro cliente
-                self.assign_task_to_available_client(task_data, task_id)
 
         elif msg_type == 'status':
             status = message.get('status')
@@ -181,10 +217,6 @@ class CentralServer():
                 if client_id in self.clients:
                     self.clients[client_id]['client_status'] = status
                     self.clients[client_id]['is_busy'] = is_busy
-                    
-                    # Si el cliente acaba de volverse disponible, intentar asignar tareas pendientes
-                    if not is_busy and status == 'available' and self.pending_tasks:
-                        self.process_pending_tasks()
 
     def get_available_clients(self):
         '''Obtener la lista de clientes disponibles'''
@@ -194,49 +226,65 @@ class CentralServer():
                 if not client_info.get('is_busy', True) and client_info.get('client_status') == 'available':
                     available_clients.append(client_id)
         return available_clients
-    
+
     def process_pending_tasks(self):
-        '''Procesa tareas pendientes si hay clientes disponibles'''
-        available_clients = self.get_available_clients()
-        if not available_clients or not self.pending_tasks:
+        '''Procesa tareas pendientes de forma simple y directa'''
+        # Buscar tareas con status 'pending' en el diccionario principal
+        pending_task_ids = [tid for tid, task in self.tasks.items() if task['status'] == 'pending']
+        
+        if not pending_task_ids:
             return
         
-        with self.clients_lock:
-            while self.pending_tasks and available_clients:
-                task_info = self.pending_tasks.pop(0)
-                task_id = task_info.get('task_id')
-                task_data = task_info.get('task_data')
-                
-                # Intentar asignar a un cliente disponible
-                client_id = available_clients.pop(0)
-                success = self.assign_tasks(client_id, task_data, task_id)
-                
-                if not success and task_id:
-                    # Si la asignación falla, volver a poner la tarea en la cola
-                    self.pending_tasks.append(task_info)
-    
-    def assign_task_to_available_client(self, task_data, task_id=None):
-        '''Asigna una tarea a un cliente disponible o la pone en cola'''
+        # Buscar clientes disponibles
         available_clients = self.get_available_clients()
+        
+        if not available_clients:
+            return
+        
+        # Asignar una tarea por vez a clientes disponibles
+        for task_id in pending_task_ids:
+            for client_id in available_clients:
+                task = self.tasks[task_id]
+                
+                # Intentar asignar la tarea
+                success = self.assign_tasks(client_id, task['data'], task_id)
+                
+                if success:
+                    # Actualizar status de la tarea
+                    self.tasks[task_id]['status'] = 'assigned'
+                    self.tasks[task_id]['client_id'] = client_id
+                    self.tasks[task_id]['assigned_at'] = datetime.now().isoformat()
+                    # self.log_event('TASK_ASSIGNED', f"Tarea {task_id} asignada a cliente {client_id}", "SYSTEM")
+                    
+                    # Remover el cliente de la lista de disponibles
+                    available_clients.remove(client_id)
+                    break  # Salir del bucle de clientes para pasar a la siguiente tarea
+            # Si no hay más clientes disponibles, parar
+            if not available_clients:
+                break
+
+    def assign_task_to_available_client(self, task_data, task_id=None):
+        '''Asigna una tarea a un cliente disponible o la almacena como pendiente'''
         
         if not task_id:
             # Si no se proporciona un ID de tarea, crear uno nuevo
             task_id = self.task_id_counter
             self.task_id_counter += 1
         
-        if not available_clients:
-            # No hay clientes disponibles, poner tarea en cola
-            self.log_event('TASK_QUEUED', f"No hay clientes disponibles. Tarea {task_id} puesta en cola")
-            self.pending_tasks.append({
-                'task_id': task_id,
-                'task_data': task_data,
-                'queued_at': datetime.now().isoformat()
-            })
-            return False
+        # Crear la tarea y almacenarla en el diccionario principal
+        task = {
+            'id': task_id,
+            'data': task_data,
+            'status': 'pending',  # Siempre comienza como pendiente
+            'created_at': datetime.now().isoformat(),
+            'client_id': None,
+            'assigned_at': None
+        }
         
-        # Asignar a un cliente disponible (balanceo de carga simple)
-        client_id = available_clients[0]
-        return self.assign_tasks(client_id, task_data, task_id)
+        self.tasks[task_id] = task
+        self.log_event('TASK_CREATED', f"Tarea {task_id} creada y almacenada como pendiente", "SYSTEM")
+        
+        return task_id  # Devolver el ID de la tarea creada
     
     def assign_tasks(self, client_id, task_data, task_id=None):
         '''asigna una tarea a un cliente especifico'''
@@ -249,19 +297,37 @@ class CentralServer():
                 self.log_event('ERROR', f"Cliente {client_id} está ocupado, no se puede asignar tarea", client_id)
                 return False
         
+        # Si no hay task_id, crear uno nuevo
         if task_id is None:
             task_id = self.task_id_counter
             self.task_id_counter += 1
-
-        task = {
-            'id': task_id,
-            'client_id': client_id,
-            'data': task_data,
-            'assigned_at': datetime.now().isoformat(),
-            'status': 'assigned'
-        }
-
-        self.tasks[task_id] = task
+            # Crear nueva tarea
+            task = {
+                'id': task_id,
+                'client_id': client_id,
+                'data': task_data,
+                'assigned_at': datetime.now().isoformat(),
+                'status': 'assigned',
+                'created_at': datetime.now().isoformat()
+            }
+            self.tasks[task_id] = task
+        else:
+            # Actualizar tarea existente
+            if task_id in self.tasks:
+                self.tasks[task_id]['client_id'] = client_id
+                self.tasks[task_id]['status'] = 'assigned'
+                self.tasks[task_id]['assigned_at'] = datetime.now().isoformat()
+            else:
+                # La tarea no existe, crear una nueva
+                task = {
+                    'id': task_id,
+                    'client_id': client_id,
+                    'data': task_data,
+                    'assigned_at': datetime.now().isoformat(),
+                    'status': 'assigned',
+                    'created_at': datetime.now().isoformat()
+                }
+                self.tasks[task_id] = task
 
         # envia la info de la tarea al cliente
         task_msg = {
@@ -272,6 +338,13 @@ class CentralServer():
 
         try:
             self.clients[client_id]['socket'].send(json.dumps(task_msg).encode()) ##
+            
+            # Marcar cliente como ocupado inmediatamente después de enviar la tarea
+            with self.clients_lock:
+                self.clients[client_id]['is_busy'] = True
+                self.clients[client_id]['client_status'] = 'busy'
+                self.clients[client_id]['assigned_task'] = task_id
+            
             self.log_event('TASK_ASSIGNED', f"Tarea {task_id} asignada: {task_data}", client_id)
                 
             return True
@@ -291,7 +364,7 @@ class CentralServer():
             'available_clients': available_clients,
             'busy_clients': busy_clients,
             'total_tasks': len(self.tasks),
-            'pending_tasks': len(self.pending_tasks),
+            'pending_tasks': len([t for t in self.tasks.values() if t['status'] == 'pending']),
             'completed_tasks': len([t for t in self.tasks.values() if t['status'] == 'completed']),
             'assigned_tasks': len([t for t in self.tasks.values() if t['status'] == 'assigned'])
         }
@@ -339,9 +412,16 @@ class CentralServer():
             broadcast_thread.daemon = True
             broadcast_thread.start()
 
-            # hilo para los comandos
+            # BUCLE PRINCIPAL DEL SERVIDOR
             while self.running:
-                self.command_interface()
+                # 1. Procesar comandos de interfaz (opcional)
+                # self.command_interface()
+                
+                # 2. Procesar tareas pendientes automáticamente
+                self.process_pending_tasks()
+                
+                # 3. Pequeña pausa para no saturar el CPU
+                time.sleep(0.1)
 
         except KeyboardInterrupt:
             self.log_event('SERVER_STOP', 'Servidor detenido')
@@ -372,7 +452,7 @@ class CentralServer():
                 if self.running:
                     self.log_event('ERORR', f"Error en comunicacion: {e}")
 
-    def command_interface(self):
+    # def command_interface(self):
         # '''hilo para la interaccion con el usuario'''
         # help_text = '''Comandos disponibles: 
         # - "status": estado actual del sistema
@@ -441,7 +521,7 @@ class CentralServer():
         #         pass
         #     except Exception as e:
         #         print(f"Error en interfaz de comandos: {e}")
-        pass
+        # pass
 
                 
 
