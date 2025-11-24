@@ -2,8 +2,9 @@
 # Basado en los scripts .sh existentes del proyecto
 
 # Variables
-SERVER_IMAGE = scrapper-server
-CLIENT_IMAGE = scrapper-client
+COORDINATOR_IMAGE = scrapper-coordinator
+SCRAPPER_IMAGE = scrapper-scrapper
+GATEWAY_IMAGE = scrapper-gateway
 NETWORK_NAME = scrapper-network
 
 # Colores
@@ -22,34 +23,34 @@ help: ## Mostrar comandos disponibles
 # BUILD
 # =============================================================================
 
-build: ## Construir imágenes del servidor y cliente
+build: ## Construir imágenes del coordinator y scrapper
 	@echo "$(YELLOW)Construyendo imágenes...$(NC)"
-	docker build -t $(SERVER_IMAGE) server/
-	docker build -t $(CLIENT_IMAGE) client/
+	docker build -t $(COORDINATOR_IMAGE) coordinator/
+	docker build -t $(SCRAPPER_IMAGE) scrapper/
 	@echo "$(GREEN)✅ Imágenes construidas$(NC)"
 
 # =============================================================================
 # RUN (modo standalone)
 # =============================================================================
 
-run-server: ## Ejecutar servidor (puertos 8080 TCP y 8081 UDP)
-	@echo "$(YELLOW)Iniciando servidor...$(NC)"
-	docker run -d --name scrapper-server \
+run-coordinator: ## Ejecutar coordinator (puertos 8080 TCP y 8081 UDP)
+	@echo "$(YELLOW)Iniciando coordinator...$(NC)"
+	docker run -d --name scrapper-coordinator \
 		--publish 8080:8080 \
 		--publish 8081:8081/udp \
-		$(SERVER_IMAGE)
+		$(COORDINATOR_IMAGE)
 
-run-client: ## Ejecutar cliente
-	docker run -d --name scrapper-client-$(shell date +%s) $(CLIENT_IMAGE)
+run-scrapper: ## Ejecutar scrapper
+	docker run -d --name scrapper-scrapper-$(shell date +%s) $(SCRAPPER_IMAGE)
 
-run-clients: ## Ejecutar múltiples clientes (NUM=3 por defecto)
+run-scrappers: ## Ejecutar múltiples scrappers (NUM=3 por defecto)
 	@for i in $$(seq 1 $(or $(NUM),3)); do \
-		docker run -d --name scrapper-client-$$i $(CLIENT_IMAGE); \
+		docker run -d --name scrapper-scrapper-$$i $(SCRAPPER_IMAGE); \
 	done
 
-start-api: ## Iniciar API REST (puerto 8082)
-	@echo "$(YELLOW)Iniciando API...$(NC)"
-	python3 server/api_server.py
+start-gateway: ## Iniciar Gateway/API REST (puerto 8082)
+	@echo "$(YELLOW)Iniciando gateway...$(NC)"
+	python3 coordinator/gateway.py
 
 # =============================================================================
 # DOCKER SWARM (basado en deploy_swarm.sh)
@@ -63,21 +64,23 @@ swarm-init: ## Inicializar Docker Swarm
 swarm-deploy: build swarm-init ## Desplegar servicios en Swarm
 	@echo "$(YELLOW)Desplegando servicios...$(NC)"
 	docker service create \
-		--name scrapper-server \
+		--name scrapper-coordinator \
 		--network $(NETWORK_NAME) \
 		--replicas 1 \
 		--publish 8080:8080 \
-		$(SERVER_IMAGE)
+		--publish 8081:8081/udp \
+		$(COORDINATOR_IMAGE)
 	docker service create \
-		--name scrapper-client \
+		--name scrapper-scrapper \
 		--network $(NETWORK_NAME) \
 		--replicas 3 \
-		--env SERVER_HOST=scrapper-server \
-		--env SERVER_PORT=8080 \
-		$(CLIENT_IMAGE)
+		$(SCRAPPER_IMAGE)
+# 		--env COORDINATOR_HOST=scrapper-coordinator \
+# 		--env COORDINATOR_PORT=8080 \
+# 		$(SCRAPPER_IMAGE)
 
-swarm-scale: ## Escalar clientes (REPLICAS=número)
-	docker service scale scrapper-client=$(REPLICAS)
+swarm-scale: ## Escalar scrappers (REPLICAS=número)
+	docker service scale scrapper-scrapper=$(REPLICAS)
 
 swarm-token: ## Obtener token para unir workers
 	docker swarm join-token worker
@@ -89,15 +92,15 @@ swarm-services: ## Listar servicios del swarm
 	docker service ls
 
 swarm-logs: ## Ver logs de servicios
-	@echo "$(YELLOW)Logs del servidor:$(NC)"
-	docker service logs scrapper-server
-	@echo "$(YELLOW)Logs de clientes:$(NC)"
-	docker service logs scrapper-client
+	@echo "$(YELLOW)Logs del coordinator:$(NC)"
+	docker service logs scrapper-coordinator
+	@echo "$(YELLOW)Logs de scrappers:$(NC)"
+	docker service logs scrapper-scrapper
 
 swarm-cleanup: ## Eliminar servicios y salir del swarm (basado en cleanup_swarm.sh)
 	@echo "$(RED)Limpiando servicios...$(NC)"
-	-docker service rm scrapper-client
-	-docker service rm scrapper-server
+	-docker service rm scrapper-scrapper
+	-docker service rm scrapper-coordinator
 	-docker network rm $(NETWORK_NAME)
 	@echo "$(YELLOW)Para salir del swarm: docker swarm leave --force$(NC)"
 
@@ -107,30 +110,30 @@ swarm-cleanup: ## Eliminar servicios y salir del swarm (basado en cleanup_swarm.
 
 status: ## Ver estado de containers/servicios
 	@echo "$(GREEN)Containers standalone:$(NC)"
-	@docker ps --filter ancestor=$(SERVER_IMAGE) --filter ancestor=$(CLIENT_IMAGE)
+	@docker ps --filter ancestor=$(COORDINATOR_IMAGE) --filter ancestor=$(SCRAPPER_IMAGE)
 	@echo ""
 	@echo "$(GREEN)Servicios swarm:$(NC)"
 	@docker service ls 2>/dev/null || echo "No hay servicios de swarm"
 
-logs: ## Ver logs del servidor
-	@if docker ps --filter name=scrapper-server -q | grep -q .; then \
-		docker logs -f scrapper-server; \
+logs: ## Ver logs del coordinator
+	@if docker ps --filter name=scrapper-coordinator -q | grep -q .; then \
+		docker logs -f scrapper-coordinator; \
 	else \
-		docker service logs -f scrapper-server 2>/dev/null || echo "Servidor no encontrado"; \
+		docker service logs -f scrapper-coordinator 2>/dev/null || echo "Coordinator no encontrado"; \
 	fi
 
 ps: ## Mostrar todos los containers del proyecto
-	docker ps --filter ancestor=$(SERVER_IMAGE) --filter ancestor=$(CLIENT_IMAGE)
+	docker ps --filter ancestor=$(COORDINATOR_IMAGE) --filter ancestor=$(SCRAPPER_IMAGE)
 
-inspect-server: ## Inspeccionar container/servicio del servidor
-	@if docker ps --filter name=scrapper-server -q | grep -q .; then \
-		docker inspect scrapper-server; \
+inspect-coordinator: ## Inspeccionar container/servicio del coordinator
+	@if docker ps --filter name=scrapper-coordinator -q | grep -q .; then \
+		docker inspect scrapper-coordinator; \
 	else \
-		docker service inspect scrapper-server 2>/dev/null || echo "Servidor no encontrado"; \
+		docker service inspect scrapper-coordinator 2>/dev/null || echo "Coordinator no encontrado"; \
 	fi
 
-exec-server: ## Conectar al container del servidor
-	docker exec -it scrapper-server /bin/bash
+exec-coordinator: ## Conectar al container del coordinator
+	docker exec -it scrapper-coordinator /bin/bash
 
 # =============================================================================
 # CLEANUP
@@ -138,19 +141,19 @@ exec-server: ## Conectar al container del servidor
 
 stop: ## Detener todos los containers
 	@echo "$(YELLOW)Deteniendo containers...$(NC)"
-	-docker stop $$(docker ps -q --filter ancestor=$(SERVER_IMAGE) --filter ancestor=$(CLIENT_IMAGE))
+	-docker stop $$(docker ps -q --filter ancestor=$(COORDINATOR_IMAGE) --filter ancestor=$(SCRAPPER_IMAGE))
 
 clean: stop ## Limpiar containers e imágenes
 	@echo "$(YELLOW)Limpiando containers...$(NC)"
-	-docker rm $$(docker ps -aq --filter ancestor=$(SERVER_IMAGE) --filter ancestor=$(CLIENT_IMAGE))
+	-docker rm $$(docker ps -aq --filter ancestor=$(COORDINATOR_IMAGE) --filter ancestor=$(SCRAPPER_IMAGE))
 	@echo "$(YELLOW)Limpiando imágenes...$(NC)"
-	-docker rmi $(SERVER_IMAGE) $(CLIENT_IMAGE)
+	-docker rmi $(COORDINATOR_IMAGE) $(SCRAPPER_IMAGE)
 
 # =============================================================================
 # SHORTCUTS
 # =============================================================================
 
-demo: build run-server ## Inicio rápido para desarrollo local
+demo: build run-coordinator ## Inicio rápido para desarrollo local
 	@sleep 3
-	@$(MAKE) run-clients NUM=2
-	@echo "$(GREEN)Demo iniciado. Usar 'make start-api' para API REST$(NC)"
+	@$(MAKE) run-scrappers NUM=2
+	@echo "$(GREEN)Demo iniciado. Usar 'make start-gateway' para Gateway/API$(NC)"
