@@ -106,7 +106,7 @@ class CoordinatorServer():
                     break
 
                 try:
-                    self.process_client_message(client_id, message)
+                    self.process_client_message(client_id, message, client_socket)
                 
                 except json.JSONDecodeError:
                     self.log_event('ERROR', 'Mensaje JSON invalido', client_id)
@@ -120,9 +120,25 @@ class CoordinatorServer():
             client_socket.close()
             self.log_event('DISCONNECTION', 'Cliente desconectado', client_id)
 
-    def process_client_message(self, client_id, message):
+    def process_client_message(self, client_id, message, client_socket):
         '''procesa los mensajes recibidos de los clientes'''
         msg_type = message.get('type')
+
+        if msg_type == 'identify':
+            # Responder al Registry/DNS con información de este servicio
+            identify_response = {
+                'service_type': 'coordinator',
+                'service_id': f'coordinator_{self.host}_{self.port}',
+                'metadata': {
+                    'host': self.host,
+                    'port': self.port,
+                    'total_clients': len(self.clients),
+                    'total_tasks': len(self.tasks)
+                }
+            }
+            client_socket.send(json.dumps(identify_response).encode() + b'\n')
+            self.log_event('IDENTIFY', f"Registry identificó este coordinator", "REGISTRY")
+            return
 
         if msg_type == 'heartbeat':
             self.clients[client_id]['last_heartbeat'] = datetime.now().isoformat()

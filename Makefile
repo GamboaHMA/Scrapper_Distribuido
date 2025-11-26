@@ -5,6 +5,7 @@
 COORDINATOR_IMAGE = scrapper-coordinator
 SCRAPPER_IMAGE = scrapper-scrapper
 GATEWAY_IMAGE = scrapper-gateway
+REGISTRY_IMAGE = scrapper-registry
 NETWORK_NAME = scrapper-network
 
 # Colores
@@ -23,10 +24,11 @@ help: ## Mostrar comandos disponibles
 # BUILD
 # =============================================================================
 
-build: ## Construir imágenes del coordinator y scrapper
+build: ## Construir imágenes del coordinator, scrapper y registry
 	@echo "$(YELLOW)Construyendo imágenes...$(NC)"
 	docker build -t $(COORDINATOR_IMAGE) coordinator/
 	docker build -t $(SCRAPPER_IMAGE) scrapper/
+	docker build -t $(REGISTRY_IMAGE) registry/
 	@echo "$(GREEN)✅ Imágenes construidas$(NC)"
 
 # =============================================================================
@@ -52,6 +54,13 @@ start-gateway: ## Iniciar Gateway/API REST (puerto 8082)
 	@echo "$(YELLOW)Iniciando gateway...$(NC)"
 	python3 coordinator/gateway.py
 
+run-registry: ## Ejecutar Registry/DNS (puerto 5353)
+	@echo "$(YELLOW)Iniciando registry...$(NC)"
+	docker run -d --name scrapper-registry \
+		--network host \
+		-e NETWORK_RANGE=192.168.1.0/24 \
+		$(REGISTRY_IMAGE)
+
 # =============================================================================
 # DOCKER SWARM (basado en deploy_swarm.sh)
 # =============================================================================
@@ -68,16 +77,14 @@ swarm-deploy: build swarm-init ## Desplegar servicios en Swarm
 		--network $(NETWORK_NAME) \
 		--replicas 1 \
 		--publish 8080:8080 \
-		--publish 8081:8081/udp \
 		$(COORDINATOR_IMAGE)
 	docker service create \
 		--name scrapper-scrapper \
 		--network $(NETWORK_NAME) \
 		--replicas 3 \
+		--env COORDINATOR_HOST=scrapper-coordinator \
+		--env COORDINATOR_PORT=8080 \
 		$(SCRAPPER_IMAGE)
-# 		--env COORDINATOR_HOST=scrapper-coordinator \
-# 		--env COORDINATOR_PORT=8080 \
-# 		$(SCRAPPER_IMAGE)
 
 swarm-scale: ## Escalar scrappers (REPLICAS=número)
 	docker service scale scrapper-scrapper=$(REPLICAS)

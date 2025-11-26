@@ -1,0 +1,2 @@
+# No hay dependencias adicionales por ahora
+# El registry usa solo librerías estándar de Python
