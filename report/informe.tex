@@ -1,0 +1,325 @@
+\documentclass[12pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[spanish]{babel}
+\usepackage{amsmath}
+\usepackage{amsfonts}
+\usepackage{amssymb}
+\usepackage{graphicx}
+\usepackage{float}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{geometry}
+\usepackage{fancyhdr}
+\usepackage{titlesec}
+\usepackage{booktabs}
+
+% Configuración de página
+\geometry{margin=2.5cm}
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[C]{Sistema de Scrapping Web Distribuido}
+\fancyfoot[C]{\thepage}
+
+% Configuración de código
+\lstset{
+    backgroundcolor=\color{gray!10},
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue},
+    commentstyle=\color{green!60!black},
+    stringstyle=\color{red},
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    frame=single,
+    breaklines=true,
+    captionpos=b
+}
+
+% Configuración de títulos
+\titleformat{\section}{\Large\bfseries}{\thesection}{1em}{}
+\titleformat{\subsection}{\large\bfseries}{\thesubsection}{1em}{}
+
+\begin{document}
+
+% Portada
+\begin{titlepage}
+    \centering
+    \vspace*{2cm}
+    
+    {\huge\bfseries Sistema de Scrapping Web Distribuido}
+    
+    \vspace{1cm}
+    {\Large Proyecto de Sistemas Distribuidos}
+    
+    \vspace{1.5cm}
+    {\large
+    Implementación de un sistema distribuido para extracción \\
+    automatizada de contenido web utilizando Docker Swarm
+    }
+    
+    \vspace{2cm}
+    {\large
+    Estudiante: [Nombre del Estudiante] \\
+    Matrícula: [Número de Matrícula] \\
+    Profesor: [Nombre del Profesor] \\
+    Asignatura: Sistemas Distribuidos
+    }
+    
+    \vfill
+    {\large Universidad [Nombre de la Universidad]}
+    
+    \vspace{0.5cm}
+    {\large \today}
+    
+\end{titlepage}
+
+% Tabla de contenidos
+\tableofcontents
+\newpage
+
+% Introducción
+\section{Introducción}
+
+\subsection{Contexto del Proyecto}
+
+Los sistemas distribuidos han revolucionado la manera en que procesamos y analizamos grandes volúmenes de información en la era digital. En particular, el web scrapping o extracción automatizada de contenido web se ha convertido en una técnica fundamental para la recopilación de datos a gran escala, utilizada en campos que van desde el análisis de mercado hasta la investigación académica.
+
+El presente proyecto implementa un \textbf{Sistema de Scrapping Web Distribuido} que aprovecha las ventajas de la computación distribuida para realizar extracción de contenido web de manera eficiente, escalable y tolerante a fallos. El sistema está diseñado bajo los principios fundamentales de los sistemas distribuidos: distribución de carga, escalabilidad horizontal, tolerancia a fallos y comunicación eficiente entre componentes.
+
+\subsection{Problemática Abordada}
+
+El scrapping web tradicional, ejecutado en un solo servidor, presenta limitaciones significativas:
+
+\begin{itemize}
+    \item \textbf{Limitaciones de rendimiento}: Un solo nodo puede procesar un número limitado de páginas web simultáneamente
+    \item \textbf{Falta de escalabilidad}: No es posible aumentar la capacidad de procesamiento dinámicamente
+    \item \textbf{Punto único de falla}: El sistema completo se ve afectado si el servidor único falla
+    \item \textbf{Ineficiencia en recursos}: No aprovecha completamente los recursos disponibles en múltiples máquinas
+    \item \textbf{Limitaciones de red}: Una sola IP puede ser bloqueada por políticas anti-scrapping
+\end{itemize}
+
+\subsection{Objetivos del Sistema}
+
+\subsubsection{Objetivo General}
+Desarrollar un sistema distribuido que permita realizar scrapping web de manera eficiente, escalable y confiable, utilizando múltiples nodos de procesamiento coordinados a través de una arquitectura cliente-servidor distribuida.
+
+\subsubsection{Objetivos Específicos}
+\begin{enumerate}
+    \item \textbf{Distribución de carga}: Implementar un mecanismo de distribución de tareas de scrapping entre múltiples nodos trabajadores
+    \item \textbf{Escalabilidad dinámica}: Permitir la incorporación y desconexión de nodos scrapper sin interrumpir el funcionamiento del sistema
+    \item \textbf{Tolerancia a fallos}: Desarrollar mecanismos de detección y recuperación ante fallos de nodos individuales
+    \item \textbf{Coordinación distribuida}: Implementar un sistema de coordinación eficiente entre el servidor central y los nodos scrapper
+    \item \textbf{Monitoreo y gestión}: Proporcionar herramientas para el monitoreo del estado del sistema y gestión de recursos
+\end{enumerate}
+
+\subsection{Arquitectura General del Sistema}
+
+El sistema implementa una arquitectura distribuida basada en el patrón \textbf{Master-Worker} con las siguientes características:
+
+\begin{itemize}
+    \item \textbf{Servidor Coordinador}: Nodo central que gestiona la cola de tareas y coordina a los nodos scrapper
+    \item \textbf{Nodos Scrapper}: Trabajadores distribuidos que ejecutan las tareas de extracción de contenido
+    \item \textbf{Gateway API}: Interfaz REST para interacción externa y monitoreo del sistema
+    \item \textbf{Red Overlay}: Infraestructura de comunicación basada en Docker Swarm
+    \item \textbf{Sistema de Descubrimiento}: Mecanismo automático para detección y registro de servicios
+\end{itemize}
+
+\section{Componente Scrapper: Diseño e Implementación}
+
+\subsection{Descripción General}
+
+El componente \textbf{Scrapper} constituye el núcleo operativo del sistema distribuido, funcionando como un nodo trabajador autónomo que se conecta dinámicamente al coordinador central para recibir y procesar tareas de extracción web. Cada instancia de scrapper opera de manera independiente, permitiendo que el sistema escale horizontalmente según las demandas de procesamiento.
+
+\subsection{Arquitectura del Scrapper}
+
+\subsubsection{Diseño de Clases}
+El scrapper está implementado a través de la clase \texttt{ScrapperNode}, que encapsula toda la funcionalidad necesaria para:
+
+\begin{itemize}
+    \item Autodescubrimiento de servicios coordinadores
+    \item Gestión de conexiones de red persistentes  
+    \item Procesamiento asíncrono de tareas de scrapping
+    \item Comunicación bidireccional con el coordinador
+    \item Manejo de estados y recuperación ante fallos
+\end{itemize}
+
+\subsubsection{Patrones de Diseño Implementados}
+
+\textbf{1. Patrón Observer}: Para el manejo de eventos de red y cambios de estado
+
+\textbf{2. Patrón Producer-Consumer}: Para la gestión de colas de mensajes entre hilos
+
+\textbf{3. Patrón State Machine}: Para el manejo de estados del scrapper (disponible, ocupado, desconectado)
+
+\subsection{Funcionalidades Principales}
+
+\subsubsection{Autodescubrimiento de Servicios}
+
+El scrapper implementa un mecanismo de autodescubrimiento que permite detectar automáticamente coordinadores disponibles en la red:
+
+\begin{lstlisting}[language=Python, caption=Mecanismo de Autodescubrimiento]
+def listen_for_broadcasts(self):
+    """Escucha señales de broadcast de los coordinadores"""
+    broadcast_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    broadcast_socket.bind(('', self.broadcast_port))
+    
+    while not self.connected:
+        data, addr = broadcast_socket.recvfrom(1024)
+        message = json.loads(data.decode())
+        
+        if message.get('type') == 'coordinator_discovery':
+            coordinator_host = message.get('coordinator_host')
+            coordinator_port = message.get('coordinator_port')
+            
+            if self.connect_to_server():
+                break
+\end{lstlisting}
+
+\textbf{Ventajas del autodescubrimiento}:
+\begin{itemize}
+    \item Eliminación de configuración manual de endpoints
+    \item Detección automática de coordinadores en la red
+    \item Adaptabilidad a cambios en la topología de red
+    \item Simplificación del despliegue de nuevos nodos
+\end{itemize}
+
+\subsubsection{Gestión de Conexiones}
+
+El sistema implementa un modelo de conexiones persistentes con gestión de hilos especializada:
+
+\begin{lstlisting}[language=Python, caption=Gestión de Conexiones Persistentes]
+def _send_worker(self):
+    """Hilo que envía mensajes desde la cola"""
+    while self.connected and not self.stop_event.is_set():
+        try:
+            message = self.message_queue.get(timeout=1.0)
+            if message is None:
+                break
+                
+            # Protocolo de envío con longitud prefijada
+            length = len(message)
+            self.socket.send(length.to_bytes(2, 'big'))
+            self.socket.send(message)
+            
+        except queue.Empty:
+            continue
+        except Exception as e:
+            logging.error(f"Error enviando mensaje: {e}")
+            self.connected = False
+            break
+\end{lstlisting}
+
+\textbf{Características de la gestión de conexiones}:
+\begin{itemize}
+    \item \textbf{Protocolo binario optimizado}: Uso de longitud prefijada para eficiencia
+    \item \textbf{Cola de mensajes thread-safe}: Comunicación asíncrona entre hilos
+    \item \textbf{Reconexión automática}: Detección y recuperación de desconexiones
+    \item \textbf{Timeouts configurables}: Prevención de bloqueos indefinidos
+\end{itemize}
+
+\subsubsection{Procesamiento de Tareas de Scrapping}
+
+El núcleo del procesamiento de tareas integra el módulo especializado \texttt{scrapper.py}:
+
+\begin{lstlisting}[language=Python, caption=Ejecución de Tareas de Scrapping]
+def execute_task(self, task_id, task_data):
+    """Ejecuta la tarea asignada"""
+    logging.info(f"Ejecutando tarea {task_id}: {task_data}")
+    
+    # Marcar como ocupado
+    self.update_busy_status(True)
+    
+    try:
+        url = task_data['url']
+        
+        # Realizar scrapping usando módulo especializado
+        scrape_result = get_html_from_url(url)
+        
+        # Preparar resultado optimizado
+        result = {
+            'url': scrape_result['url'],
+            'html_length': len(scrape_result['html']),
+            'links_count': len(scrape_result['links']),
+            'links': scrape_result['links'][:10],  # Primeros 10 enlaces
+            'status': 'success'
+        }
+        
+    except Exception as e:
+        result = {
+            'status': 'error',
+            'error': str(e)
+        }
+    finally:
+        # Marcar como disponible
+        self.update_busy_status(False)
+\end{lstlisting}
+
+\textbf{Optimizaciones implementadas}:
+\begin{itemize}
+    \item \textbf{Gestión de estado automática}: Actualización automática de disponibilidad
+    \item \textbf{Resultados optimizados}: Transmisión de metadata en lugar de contenido completo
+    \item \textbf{Manejo robusto de errores}: Captura y reporte de fallos sin afectar el sistema
+    \item \textbf{Integración modular}: Uso del módulo \texttt{scrapper.py} sin modificaciones
+\end{itemize}
+
+\subsubsection{Sistema de Heartbeat y Monitoreo}
+
+Implementación de un sistema de latidos para mantener la conectividad:
+
+\begin{lstlisting}[language=Python, caption=Sistema de Heartbeat]
+def send_heartbeat(self):
+    """Envía señal periódica al servidor"""
+    while self.connected:
+        try:
+            heartbeat_msg = {
+                'type': 'heartbeat',
+                'client_id': self.client_id,
+                'time_now': datetime.now().isoformat()
+            }
+            
+            self._enqueue_message(heartbeat_msg)
+            time.sleep(60)  # Heartbeat cada 60 segundos
+            
+        except Exception:
+            self.connected = False
+\end{lstlisting}
+
+\subsection{Ventajas del Diseño Distribuido del Scrapper}
+
+\subsubsection{Escalabilidad Horizontal}
+\begin{itemize}
+    \item Capacidad de agregar nodos scrapper dinámicamente
+    \item Distribución automática de carga entre nodos disponibles
+    \item Adaptación automática a variaciones en la demanda
+\end{itemize}
+
+\subsubsection{Tolerancia a Fallos}
+\begin{itemize}
+    \item Detección automática de fallos de nodo
+    \item Redistribución de tareas ante fallos
+    \item Reconexión automática de nodos recuperados
+\end{itemize}
+
+\subsubsection{Eficiencia de Recursos}
+\begin{itemize}
+    \item Procesamiento paralelo de múltiples URLs
+    \item Utilización optimizada de recursos de red
+    \item Balanceado automático de carga de trabajo
+\end{itemize}
+
+\subsubsection{Flexibilidad de Despliegue}
+\begin{itemize}
+    \item Despliegue en múltiples máquinas físicas
+    \item Compatibilidad con contenedores Docker
+    \item Integración con orquestadores como Docker Swarm
+\end{itemize}
+
+\section{Conclusiones Parciales}
+
+El componente Scrapper representa una implementación robusta de un nodo trabajador distribuido que combina eficiencia, escalabilidad y tolerancia a fallos. Su diseño modular y uso de patrones de sistemas distribuidos establecidos proporciona una base sólida para el procesamiento distribuido de tareas de web scrapping.
+
+Las características implementadas, como el autodescubrimiento de servicios, la gestión de conexiones persistentes y el sistema de heartbeat, demuestran la aplicación práctica de conceptos fundamentales de sistemas distribuidos en un contexto real de procesamiento de datos web.
+
+% Pendiente: Secciones sobre Coordinador, Gateway API, Sistema de Descubrimiento, Resultados Experimentales, etc.
+
+\end{document}
