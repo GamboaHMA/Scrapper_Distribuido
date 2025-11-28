@@ -23,6 +23,7 @@ class ScrapperNode():
     def __init__(self, coordinator_host=None, coordinator_port=8080, broadcast_port=8081) -> None:
         self.coordinator_host = coordinator_host
         self.coordinator_port = coordinator_port
+        self.coordinator = {} # info del coordinator {'name':..., 'host':..., 'port':...}
         self.broadcast_port = broadcast_port
         self.client_id = None
         self.connected = False
@@ -38,7 +39,7 @@ class ScrapperNode():
         self.is_busy = False
         self.status_lock = threading.Lock()
         # Coordinatores detectados
-        self.discovered_servers = set()
+        self.discovered_coords = set()
         # Flag para auto-descubrimiento
         self.auto_discovery = coordinator_host is None
 
@@ -73,7 +74,7 @@ class ScrapperNode():
                                     coordinator_host = addr[0]
                                 
                                 server_info = (coordinator_host, coordinator_port)
-                                self.discovered_servers.add(server_info)
+                                self.discovered_coords.add(server_info)
                                 logging.info(f"Coordinator descubierto: {coordinator_host}:{coordinator_port}")
                                 
                                 # Conectar al primer coordinator descubierto
@@ -165,7 +166,7 @@ class ScrapperNode():
                 logging.error(f"Error en hilo de envio: {e}")
         
     def _enqueue_message(self, message_dict):
-        '''encola un mensaje para eviar'''
+        '''encola un mensaje para enviar'''
         if not self.connected:
             logging.warning("Cliente no conectado, no se puede enviar mensaje")
             return False

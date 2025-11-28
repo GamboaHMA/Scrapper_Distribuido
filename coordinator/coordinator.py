@@ -17,7 +17,7 @@ logging.basicConfig(
 )
 
 class CoordinatorServer():
-    def __init__(self, host='0.0.0.0', port=8080, broadcast_port=8081) -> None:
+    def __init__(self, host='0.0.0.0', port=8080, broadcast_port=8081, dns_port=5353) -> None:
         self.host = host
         self.port = port
         self.broadcast_port = broadcast_port
@@ -39,6 +39,9 @@ class CoordinatorServer():
         # Permitir broadcast en este socket
         self.broadcast_socket.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
         self.broadcast_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        # DNS socket
+        
+        
 
     
     def receive_messages(self, client_socket):
@@ -77,6 +80,9 @@ class CoordinatorServer():
     def handle_client(self, client_socket, client_address):
         '''Comunicacion con un cliente conectado'''
         client_id = f"{client_address[0]}:{client_address[1]}"
+        
+        # message = self.receive_messages(client_socket)
+            
 
         try:
             # registra nueva conexion
@@ -95,7 +101,7 @@ class CoordinatorServer():
             welcome_msg = {
                 'type': 'welcome',
                 'client_id': client_id,
-                'message': 'Conectado al coordinator central'
+                'message': 'Conectado al coordinador central'
             } 
             client_socket.send(json.dumps(welcome_msg).encode())
 
@@ -107,6 +113,7 @@ class CoordinatorServer():
 
                 try:
                     self.process_client_message(client_id, message, client_socket)
+                    self.log_event('MESSAGE_RECEIVED', f"Mensaje recibido: {message}", client_id)
                 
                 except json.JSONDecodeError:
                     self.log_event('ERROR', 'Mensaje JSON invalido', client_id)
@@ -418,7 +425,7 @@ class CoordinatorServer():
         self.log_event('SERVER_START', f"Coordinator iniciado en {self.host}:{self.port}")
 
         try:
-            # Iniciar hilo para aceptar conexiones de clientes
+            # Iniciar hilo para aceptar conexiones
             accept_thread = threading.Thread(target=self.accepts_conections)
             accept_thread.daemon = True
             accept_thread.start()

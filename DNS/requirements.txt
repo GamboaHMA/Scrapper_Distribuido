@@ -1,0 +1,3 @@
+# Requirements para DNS Service
+# Solo dependencias externas (los módulos estándar de Python no necesitan instalarse)
+# Este DNS usa solo librerías estándar de Python
