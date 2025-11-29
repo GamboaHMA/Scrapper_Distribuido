@@ -228,3 +228,7 @@
 2025-10-13 14:58:01,153 - INFO - [PING] Client 127.0.0.1:36526: Recibiendo ping
 2025-10-13 14:58:04,881 - INFO - [PING] Client 127.0.0.1:36526: Recibiendo ping
 2025-10-13 14:58:09,686 - INFO - [SERVER_STOP] Servidor detenido
+2025-11-09 14:19:20,122 - INFO - [SERVER_START] Servidor iniciado en 0.0.0.0:8080
+2025-11-09 14:19:20,132 - INFO - [ERROR] Error en envío de broadcast: [Errno 101] Network is unreachable
+2025-11-09 14:19:25,134 - INFO - [ERROR] Error en envío de broadcast: [Errno 101] Network is unreachable
+2025-11-09 14:19:28,307 - INFO - [SERVER_STOP] Servidor detenido
