@@ -9,31 +9,57 @@
 \providecommand\HyField@AuxAddToFields[1]{}
 \providecommand\HyField@AuxAddToCoFields[2]{}
 \babel@aux{spanish}{}
-\@writefile{toc}{\contentsline {section}{\numberline {1}Introducción}{2}{section.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {1.1}Contexto del Proyecto}{2}{subsection.1.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {1.2}Problemática Abordada}{2}{subsection.1.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {1.3}Objetivos del Sistema}{2}{subsection.1.3}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {1.3.1}Objetivo General}{2}{subsubsection.1.3.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {1.3.2}Objetivos Específicos}{2}{subsubsection.1.3.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {1.4}Arquitectura General del Sistema}{3}{subsection.1.4}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {2}Componente Scrapper: Diseño e Implementación}{3}{section.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {2.1}Descripción General}{3}{subsection.2.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {2.2}Arquitectura del Scrapper}{3}{subsection.2.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {2.2.1}Diseño de Clases}{3}{subsubsection.2.2.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {2.2.2}Patrones de Diseño Implementados}{4}{subsubsection.2.2.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {2.3}Funcionalidades Principales}{4}{subsection.2.3}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {2.3.1}Autodescubrimiento de Servicios}{4}{subsubsection.2.3.1}\protected@file@percent }
-\@writefile{lol}{\contentsline {lstlisting}{\numberline {1}Mecanismo de Autodescubrimiento}{4}{lstlisting.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {2.3.2}Gestión de Conexiones}{4}{subsubsection.2.3.2}\protected@file@percent }
-\@writefile{lol}{\contentsline {lstlisting}{\numberline {2}Gestión de Conexiones Persistentes}{4}{lstlisting.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {2.3.3}Procesamiento de Tareas de Scrapping}{5}{subsubsection.2.3.3}\protected@file@percent }
-\@writefile{lol}{\contentsline {lstlisting}{\numberline {3}Ejecución de Tareas de Scrapping}{5}{lstlisting.3}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {2.3.4}Sistema de Heartbeat y Monitoreo}{6}{subsubsection.2.3.4}\protected@file@percent }
-\@writefile{lol}{\contentsline {lstlisting}{\numberline {4}Sistema de Heartbeat}{6}{lstlisting.4}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {2.4}Ventajas del Diseño Distribuido del Scrapper}{6}{subsection.2.4}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {2.4.1}Escalabilidad Horizontal}{6}{subsubsection.2.4.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {2.4.2}Tolerancia a Fallos}{7}{subsubsection.2.4.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {2.4.3}Eficiencia de Recursos}{7}{subsubsection.2.4.3}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {2.4.4}Flexibilidad de Despliegue}{7}{subsubsection.2.4.4}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {3}Conclusiones Parciales}{7}{section.3}\protected@file@percent }
-\gdef \@abspage@last{8}
+\@writefile{toc}{\contentsline {section}{\numberline {1}Introducción}{3}{section.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {1.1}Contexto del Proyecto}{3}{subsection.1.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {1.2}Problemática Abordada}{3}{subsection.1.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {1.3}Objetivos del Sistema}{3}{subsection.1.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {1.3.1}Objetivo General}{3}{subsubsection.1.3.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {1.3.2}Objetivos Específicos}{3}{subsubsection.1.3.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {1.4}Arquitectura General del Sistema}{4}{subsection.1.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {1.4.1}Nodos Base de Datos}{4}{subsubsection.1.4.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {1.4.2}Nodos Enrutador/Coordinador}{4}{subsubsection.1.4.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {1.4.3}Nodos Scrapper (Workers)}{5}{subsubsection.1.4.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {1.4.4}Infraestructura de Soporte}{5}{subsubsection.1.4.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {2}Componente Scrapper: Nodo Worker Especializado}{5}{section.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.1}Descripción General}{5}{subsection.2.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {2.1.1}Principios de Diseño del Worker con Coordinación}{5}{subsubsection.2.1.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.2}Arquitectura del Scrapper}{6}{subsection.2.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {2.2.1}Diseño de Clases}{6}{subsubsection.2.2.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {2.2.2}Patrones de Diseño Implementados}{6}{subsubsection.2.2.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.3}Funcionalidades Principales}{6}{subsection.2.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {2.3.1}Autodescubrimiento de Servicios}{6}{subsubsection.2.3.1}\protected@file@percent }
+\@writefile{lol}{\contentsline {lstlisting}{\numberline {1}Mecanismo de Autodescubrimiento}{6}{lstlisting.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {2.3.2}Gestión de Conexiones}{7}{subsubsection.2.3.2}\protected@file@percent }
+\@writefile{lol}{\contentsline {lstlisting}{\numberline {2}Gestión de Conexiones Persistentes}{7}{lstlisting.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {2.3.3}Procesamiento de Tareas de Scrapping}{7}{subsubsection.2.3.3}\protected@file@percent }
+\@writefile{lol}{\contentsline {lstlisting}{\numberline {3}Ejecución de Tareas de Scrapping}{7}{lstlisting.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {2.3.4}Sistema de Heartbeat y Monitoreo}{8}{subsubsection.2.3.4}\protected@file@percent }
+\@writefile{lol}{\contentsline {lstlisting}{\numberline {4}Sistema de Heartbeat}{8}{lstlisting.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.4}Ventajas del Diseño Distribuido del Scrapper}{9}{subsection.2.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {2.4.1}Escalabilidad Horizontal}{9}{subsubsection.2.4.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {2.4.2}Tolerancia a Fallos}{9}{subsubsection.2.4.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {2.4.3}Eficiencia de Recursos}{9}{subsubsection.2.4.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {2.4.4}Flexibilidad de Despliegue}{9}{subsubsection.2.4.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {3}Flujo de Datos y Comunicación Inter-Nodos}{9}{section.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.1}Pipeline de Procesamiento Distribuido}{9}{subsection.3.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.2}Patrones de Comunicación}{10}{subsection.3.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.2.1}Enrutador → Scrapper}{10}{subsubsection.3.2.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.2.2}Scrapper → Enrutador}{10}{subsubsection.3.2.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.2.3}Enrutador → Base de Datos}{10}{subsubsection.3.2.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.3}Tolerancia a Fallos y Mecanismos de Recuperación}{10}{subsection.3.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.3.1}Estrategias de Tolerancia a Fallos por Capas}{10}{subsubsection.3.3.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.3.2}IP Cache para Recuperación de DNS}{10}{subsubsection.3.3.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {4}Sistema de Liderazgo Distribuido con Algoritmo Bully}{11}{section.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.1}Arquitectura de Grupos Interconectados}{11}{subsection.4.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {4.1.1}Principios de Interconexión y Organización}{11}{subsubsection.4.1.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.2}Implementación del Algoritmo Bully}{12}{subsection.4.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {4.2.1}Elección de Líderes en Todos los Grupos}{12}{subsubsection.4.2.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {4.2.2}Roles y Responsabilidades del Líder por Tipo de Grupo}{12}{subsubsection.4.2.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.3}Recuperación ante Fallos de Liderazgo}{13}{subsection.4.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {4.3.1}Detección de Fallos del Líder}{13}{subsubsection.4.3.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {4.3.2}Proceso de Recuperación}{13}{subsubsection.4.3.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.4}Ventajas de la Arquitectura de Liderazgo}{13}{subsection.4.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {4.4.1}Beneficios Operacionales}{13}{subsubsection.4.4.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {4.4.2}Tolerancia a Fallos Mejorada}{14}{subsubsection.4.4.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {5}Conclusiones Parciales}{14}{section.5}\protected@file@percent }
+\gdef \@abspage@last{15}
