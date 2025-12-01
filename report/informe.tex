@@ -581,7 +581,7 @@ El sistema implementa replicación mediante selección aleatoria de nodos dispon
 
 
 
-\section{Conclusiones Parciales}
+\section{Conclusiones}
 
 La arquitectura de tres capas con sistema de liderazgo distribuido proporciona una solución robusta y escalable para el procesamiento distribuido de web scrapping. La combinación del algoritmo bully para elección de líderes, la replicación automática de información y el sistema de IP caché para tolerancia a fallos de DNS, resulta en un sistema altamente resiliente.
 
@@ -592,7 +592,5 @@ El sistema de replicación diferenciado por grupos --- con replicación completa
 El diseño jerárquico con líderes en todos los grupos optimiza la comunicación inter-grupos mientras mantiene redundancia y capacidad de recuperación automática ante fallos. Los nodos scrapper, aunque participan en el sistema de liderazgo distribuido, mantienen su especialización como workers puros, garantizando simplicidad operativa y máxima escalabilidad horizontal con coordinación inteligente.
 
 Las características implementadas, como el autodescubrimiento de servicios mediante DNS de Docker, la gestión de conexiones persistentes con threading especializado, el sistema de heartbeat distribuido y las estrategias de replicación adaptativas, demuestran la aplicación integral de conceptos fundamentales de sistemas distribuidos en un contexto real de procesamiento de datos web.
-
-% Pendiente: Secciones sobre Coordinador (implementación detallada), Gateway API, Resultados Experimentales y Análisis de Rendimiento
 
 \end{document}

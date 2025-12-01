@@ -1,7 +1,7 @@
 # Fdb version 4
-["pdflatex"] 1764605069.07269 "/media/david/02E8AC2CE8AC1FC1/Cosas_mias/docs/4to_ano/Distribuido/Proyecto/Scrapper_Distribuido/report/informe.tex" "informe.pdf" "informe" 1764605069.74056 0
+["pdflatex"] 1764607027.82204 "/media/david/02E8AC2CE8AC1FC1/Cosas_mias/docs/4to_ano/Distribuido/Proyecto/Scrapper_Distribuido/report/informe.tex" "informe.pdf" "informe" 1764607028.46624 0
   "/etc/texmf/web2c/texmf.cnf" 1744433969.39278 475 c0e671620eb5563b2130f56340a5fde8 ""
-  "/media/david/02E8AC2CE8AC1FC1/Cosas_mias/docs/4to_ano/Distribuido/Proyecto/Scrapper_Distribuido/report/informe.tex" 1764605068.26131 29490 a6f390d1334c29e2b999a0809e3935b2 ""
+  "/media/david/02E8AC2CE8AC1FC1/Cosas_mias/docs/4to_ano/Distribuido/Proyecto/Scrapper_Distribuido/report/informe.tex" 1764607026.90808 29343 c9441a509484a9df1b59656563349702 ""
   "/usr/share/texlive/texmf-dist/fonts/map/fontname/texfonts.map" 1577235249 3524 cb3e574dea2d1052e39280babc910dc8 ""
   "/usr/share/texlive/texmf-dist/fonts/tfm/jknappen/ec/ecbx1200.tfm" 1136768653 3584 402da0b29eafbad07963b1224b222f18 ""
   "/usr/share/texlive/texmf-dist/fonts/tfm/jknappen/ec/ecbx1440.tfm" 1136768653 3584 13049b61b922a28b158a38aeff75ee9b ""
@@ -115,10 +115,10 @@
   "/usr/share/texmf/web2c/texmf.cnf" 1707919699 40399 f2c302f7d2af602abb742093540a5834 ""
   "/var/lib/texmf/fonts/map/pdftex/updmap/pdftex.map" 1744433983.51894 5472669 54eaf61a88b6b7896ebd0dac973cb29c ""
   "/var/lib/texmf/web2c/pdftex/pdflatex.fmt" 1744434015 8214818 8161385defdd524cef67904a9733cb98 ""
-  "informe.aux" 1764605069.66831 10349 d60af42a3a00a896e6333e84795ce465 "pdflatex"
-  "informe.out" 1764605069.66931 15742 33f2b83f88cec0edbe6802f078ebfa53 "pdflatex"
-  "informe.tex" 1764605068.26131 29490 a6f390d1334c29e2b999a0809e3935b2 ""
-  "informe.toc" 1764605069.66931 7184 bce768b55a1ee3a1f7b8dd76be88bba0 "pdflatex"
+  "informe.aux" 1764607028.41218 10339 417b458039336249d5d25e8097b6e2eb "pdflatex"
+  "informe.out" 1764607028.41317 15689 628d41e0fccc1b03f9cb0d8aeabeeeda "pdflatex"
+  "informe.tex" 1764607026.90808 29343 c9441a509484a9df1b59656563349702 ""
+  "informe.toc" 1764607028.41317 7174 0374f9a4c6487356b03a61a85532e754 "pdflatex"
   (generated)
   "informe.aux"
   "informe.log"

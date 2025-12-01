@@ -68,4 +68,4 @@
 \contentsline {subsection}{\numberline {7.2}Confiabilidad de Réplicas tras Actualizaciones}{14}{subsection.7.2}%
 \contentsline {subsubsection}{\numberline {7.2.1}Protocolo de Consistencia}{14}{subsubsection.7.2.1}%
 \contentsline {subsubsection}{\numberline {7.2.2}Recuperación ante Inconsistencias}{15}{subsubsection.7.2.2}%
-\contentsline {section}{\numberline {8}Conclusiones Parciales}{15}{section.8}%
+\contentsline {section}{\numberline {8}Conclusiones}{15}{section.8}%
