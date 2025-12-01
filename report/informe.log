@@ -1,4 +1,4 @@
-This is pdfTeX, Version 3.141592653-2.6-1.40.25 (TeX Live 2023/Debian) (preloaded format=pdflatex 2025.4.12)  29 NOV 2025 18:14
+This is pdfTeX, Version 3.141592653-2.6-1.40.25 (TeX Live 2023/Debian) (preloaded format=pdflatex 2025.4.12)  1 DEC 2025 00:11
 entering extended mode
  restricted \write18 enabled.
  file:line:error style messages enabled.
@@ -460,28 +460,21 @@ File: umsb.fd 2013/01/14 v3.01 AMS symbols B
 pdfTeX warning (ext4): destination with the same identifier (name{page.1}) has been already used, duplicate ignored
 <to be read again> 
                    \relax 
-l.46 ...de Recuperación}{13}{subsubsection.4.3.2}
-                                                  % [1{/usr/share/texmf/fonts/enc/dvips/cm-super/cm-super-ts1.enc}])
+l.45 ...Líder Enrutador}{10}{subsubsection.4.2.1}
+                                                  % [1])
 \tf@toc=\write4
 \openout4 = `informe.toc'.
 
- [2] [3] [4]
-LaTeX Font Info:    Trying to load font information for T1+cmtt on input line 190.
+ [2{/usr/share/texmf/fonts/enc/dvips/cm-super/cm-super-ts1.enc}] [3] [4]
+LaTeX Font Info:    Trying to load font information for T1+cmtt on input line 172.
  (/usr/share/texlive/texmf-dist/tex/latex/base/t1cmtt.fd
 File: t1cmtt.fd 2023/04/13 v2.5m Standard LaTeX font definitions
-) [5] (/usr/share/texlive/texmf-dist/tex/latex/listings/lstlang1.sty
-File: lstlang1.sty 2023/02/27 1.9 listings language file
 )
-Package hyperref Info: bookmark level for unknown lstlisting defaults to 0 on input line 214.
-LaTeX Font Info:    Trying to load font information for TS1+cmtt on input line 218.
- (/usr/share/texlive/texmf-dist/tex/latex/base/ts1cmtt.fd
-File: ts1cmtt.fd 2023/04/13 v2.5m Standard LaTeX font definitions
-) [6] [7] [8] [9] [10]
-Overfull \hbox (5.61409pt too wide) in paragraph at lines 438--438
-|[]\T1/cmr/bx/n/17.28 Sistema de Li-de-raz-go Dis-tri-bui-do con Al-go-rit-mo Bully| 
+Overfull \hbox (10.31163pt too wide) in paragraph at lines 182--183
+[]\T1/cmr/m/n/12 Establecimiento de co-ne-xio-nes peer-to-peer me-dian-te \T1/cmtt/m/n/12 socket.create_connection () 
  []
 
-[11] [12] [13] [14] (./informe.aux
+[5] [6] [7] [8] [9] [10] [11] [12] [13] [14] [15] (./informe.aux
 LaTeX Info: Redefining \. on input line 11.
 LaTeX Info: Redefining \% on input line 11.
 )
@@ -490,21 +483,21 @@ LaTeX2e <2023-11-01> patch level 1
 L3 programming layer <2024-01-22>
  ***********
 Package rerunfilecheck Info: File `informe.out' has not changed.
-(rerunfilecheck)             Checksum: D9616468A947D761BA670CD18B052356;10883.
+(rerunfilecheck)             Checksum: 17F1CB617D7EE93F9BC1EB9F7A9DBC77;15739.
  ) 
 Here is how much of TeX's memory you used:
- 14922 strings out of 474222
- 223297 string characters out of 5748733
- 2110975 words of memory out of 5000000
- 36808 multiletter control sequences out of 15000+600000
- 572026 words of font info for 69 fonts, out of 8000000 for 9000
+ 14382 strings out of 474222
+ 217668 string characters out of 5748733
+ 1941975 words of memory out of 5000000
+ 36319 multiletter control sequences out of 15000+600000
+ 569879 words of font info for 65 fonts, out of 8000000 for 9000
  1141 hyphenation exceptions out of 8191
- 75i,12n,79p,585b,2094s stack positions out of 10000i,1000n,20000p,200000b,200000s
-</usr/share/texlive/texmf-dist/fonts/type1/public/amsfonts/cm/cmsy10.pfb></usr/share/texmf/fonts/type1/public/cm-super/sfbx1200.pfb></usr/share/texmf/fonts/type1/public/cm-super/sfbx1440.pfb></usr/share/texmf/fonts/type1/public/cm-super/sfbx1728.pfb></usr/share/texmf/fonts/type1/public/cm-super/sfbx2488.pfb></usr/share/texmf/fonts/type1/public/cm-super/sfrm0600.pfb></usr/share/texmf/fonts/type1/public/cm-super/sfrm1200.pfb></usr/share/texmf/fonts/type1/public/cm-super/sfrm1440.pfb></usr/share/texmf/fonts/type1/public/cm-super/sfrm1728.pfb></usr/share/texmf/fonts/type1/public/cm-super/sftt1095.pfb></usr/share/texmf/fonts/type1/public/cm-super/sftt1200.pfb>
-Output written on informe.pdf (15 pages, 271065 bytes).
+ 75i,12n,79p,585b,784s stack positions out of 10000i,1000n,20000p,200000b,200000s
+</usr/share/texmf/fonts/type1/public/cm-super/sfbx1200.pfb></usr/share/texmf/fonts/type1/public/cm-super/sfbx1440.pfb></usr/share/texmf/fonts/type1/public/cm-super/sfbx1728.pfb></usr/share/texmf/fonts/type1/public/cm-super/sfbx2488.pfb></usr/share/texmf/fonts/type1/public/cm-super/sfrm1200.pfb></usr/share/texmf/fonts/type1/public/cm-super/sfrm1440.pfb></usr/share/texmf/fonts/type1/public/cm-super/sfrm1728.pfb></usr/share/texmf/fonts/type1/public/cm-super/sftt1200.pfb>
+Output written on informe.pdf (16 pages, 209428 bytes).
 PDF statistics:
- 528 PDF objects out of 1000 (max. 8388607)
- 481 compressed objects within 5 object streams
- 171 named destinations out of 1000 (max. 500000)
- 393 words of extra memory for PDF output out of 10000 (max. 10000000)
+ 550 PDF objects out of 1000 (max. 8388607)
+ 508 compressed objects within 6 object streams
+ 130 named destinations out of 1000 (max. 500000)
+ 561 words of extra memory for PDF output out of 10000 (max. 10000000)
 

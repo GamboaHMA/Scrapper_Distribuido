@@ -69,14 +69,12 @@
     
     \vspace{2cm}
     {\large
-    Estudiante: [Nombre del Estudiante] \\
-    Matrícula: [Número de Matrícula] \\
-    Profesor: [Nombre del Profesor] \\
+    Estudiantes: David S\'anchez Iglesias y Manuel Alejandro Gamboa Hern\'andez\\
     Asignatura: Sistemas Distribuidos
     }
     
     \vfill
-    {\large Universidad [Nombre de la Universidad]}
+    {\large Universidad de La Habana}
     
     \vspace{0.5cm}
     {\large \today}
@@ -105,7 +103,6 @@ El scrapping web tradicional, ejecutado en un solo servidor, presenta limitacion
     \item \textbf{Falta de escalabilidad}: No es posible aumentar la capacidad de procesamiento dinámicamente
     \item \textbf{Punto único de falla}: El sistema completo se ve afectado si el servidor único falla
     \item \textbf{Ineficiencia en recursos}: No aprovecha completamente los recursos disponibles en múltiples máquinas
-    \item \textbf{Limitaciones de red}: Una sola IP puede ser bloqueada por políticas anti-scrapping
 \end{itemize}
 
 \subsection{Objetivos del Sistema}
@@ -120,7 +117,7 @@ Desarrollar un sistema distribuido que permita realizar scrapping web de manera 
     \item \textbf{Workers puros escalables}: Diseñar nodos scrapper stateless que permitan escalabilidad horizontal sin complejidad adicional
     \item \textbf{Coordinación inteligente}: Implementar nodos enrutadores que gestionen eficientemente la distribución de tareas y recolección de resultados
     \item \textbf{Persistencia confiable}: Desarrollar nodos de base de datos que garanticen el almacenamiento seguro de información scrapeada
-    \item \textbf{Sistema de liderazgo distribuido}: Implementar algoritmo bully para elección democrática de líderes en cada grupo de nodos
+    \item \textbf{Sistema de liderazgo distribuido}: Implementar algoritmo bully para elección automática de líderes en cada grupo de nodos
     \item \textbf{Tolerancia a fallos multi-nivel}: Desarrollar mecanismos de recuperación que incluyan IP cache para fallos de DNS y elección automática de líderes
     \item \textbf{Replicación automática}: Garantizar que la información se replique automáticamente entre nodos del mismo grupo
     \item \textbf{Filtrado de calidad}: Asegurar que solo datos exitosamente scrapeados lleguen a la capa de persistencia
@@ -128,7 +125,7 @@ Desarrollar un sistema distribuido que permita realizar scrapping web de manera 
 
 \subsection{Arquitectura General del Sistema}
 
-El sistema implementa una arquitectura distribuida de tres capas basada en el patrón \textbf{Producer-Consumer} distribuido con especialización de roles. La arquitectura está compuesta por tres tipos de nodos principales que operan de manera coordinada:
+El sistema implementa una arquitectura distribuida de tres capas con especialización de roles. La arquitectura está compuesta por tres tipos de nodos principales que operan de manera coordinada:
 
 \subsubsection{Nodos Base de Datos}
 \textbf{Función}: Almacenamiento y persistencia de información
@@ -140,13 +137,12 @@ El sistema implementa una arquitectura distribuida de tres capas basada en el pa
 \end{itemize}
 
 \subsubsection{Nodos Enrutador/Coordinador}
-\textbf{Función}: Coordinación y distribución de tareas
+\textbf{Función}: Transmisión de información y manejo de peticiones
 \begin{itemize}
-    \item Actúan como intermediarios entre la entrada de URLs y los workers
-    \item Distribuyen tareas de scrapping entre nodos scrapper disponibles
-    \item Recolectan resultados de scrapping de los nodos worker
-    \item Envían datos procesados a los nodos de base de datos
-    \item Gestionan el balanceado de carga y tolerancia a fallos
+    \item Actúan como intermediarios de comunicación entre diferentes tipos de nodos
+    \item Transmiten información entre los líderes de los diferentes grupos
+    \item Manejan las peticiones de los clientes externos
+    \item Facilitan la comunicación inter-grupos sin distribuir tareas directamente
 \end{itemize}
 
 \subsubsection{Nodos Scrapper (Workers)}
@@ -156,7 +152,6 @@ El sistema implementa una arquitectura distribuida de tres capas basada en el pa
     \item Reciben URLs específicas para procesar
     \item Ejecutan el proceso de scrapping de manera autónoma
     \item Retornan resultados estructurados al nodo enrutador
-    \item Operan de forma stateless para máxima escalabilidad
 \end{itemize}
 
 \subsubsection{Infraestructura de Soporte}
@@ -166,11 +161,113 @@ El sistema implementa una arquitectura distribuida de tres capas basada en el pa
     \item \textbf{Gateway API}: Interfaz REST para interacción externa y monitoreo del sistema
 \end{itemize}
 
+\section{Sistema de Balanceo de Carga y Liderazgo Distribuido}
+
+\subsection{Arquitectura Común de Comunicación}
+
+Todos los tipos de nodos del sistema (scrapper, enrutador y base de datos) comparten una arquitectura común de comunicación que implementa cuatro actividades fundamentales:
+
+\subsubsection{Sistema de Escucha}
+\begin{itemize}
+    \item Apertura de puerto de escucha mediante \texttt{socket.bind~()}
+    \item Hilo dedicado para \texttt{socket.accept~()} que registra nuevos sockets
+    \item Creación de hilos especializados para procesar mensajes entrantes
+\end{itemize}
+
+\subsubsection{Conexión con Nodos Semejantes}
+\begin{itemize}
+    \item Método \texttt{buscar\_semejantes~()} para conectarse con nodos del mismo rol
+    \item Uso de \texttt{--hostname} y \texttt{--network-alias} de Docker
+    \item \texttt{socket.getaddrinfo~(network\_alias)} para obtener IPs de servicios
+    \item Establecimiento de conexiones peer-to-peer mediante \texttt{socket.create\_connection~()}
+    \item Ejecución periódica para descubrir nuevos servicios dinámicamente
+\end{itemize}
+
+\subsubsection{Sistema de Envío de Mensajes}
+\begin{itemize}
+    \item Cola de mensajes con tuplas (mensaje, socket\_destino)
+    \item Proceso \texttt{send\_worker~()} que consume la cola con timeout
+    \item Protocolo de envío: longitud del mensaje + mensaje completo
+    \item Método thread-safe para inserción en la cola
+\end{itemize}
+
+\subsubsection{Funcionalidades de Mantenimiento}
+\begin{itemize}
+    \item \texttt{send\_heartbeat~()}: Confirmación periódica de conectividad
+    \item Monitoreo del estado de conexiones peer-to-peer
+    \item Detección de fallos y reconexión automática
+    \item Gestión del ciclo de vida de hilos de comunicación
+\end{itemize}
+
+\subsection{Algoritmo Bully para Elección de Líderes}
+
+\subsubsection{Principio del Algoritmo}
+El sistema implementa el algoritmo bully para la elección de líderes en cada grupo de nodos:
+
+\begin{itemize}
+    \item \textbf{Criterio de selección}: El nodo con la IP más alta se convierte en líder
+    \item \textbf{Proceso determinístico}: No requiere votación ni intervención manual
+    \item \textbf{Automático}: La conexión peer-to-peer facilita la comparación de IPs
+    \item \textbf{Jerárquico}: Basado en un orden natural (direcciones IP)
+\end{itemize}
+
+\subsubsection{Proceso de Elección}
+\begin{enumerate}
+    \item Cada nodo obtiene las IPs de todos los nodos del mismo tipo
+    \item Se establece comunicación peer-to-peer con los nodos descubiertos
+    \item Comparación automática de IPs durante el proceso de conexión
+    \item El nodo con mayor IP asume automáticamente el rol de líder
+    \item Notificación implícita del liderazgo a través de las conexiones
+\end{enumerate}
+
+\subsubsection{Responsabilidades Diferenciadas por Tipo de Nodo}
+\textbf{Líderes de Base de Datos y Enrutadores}:
+\begin{itemize}
+    \item Replican toda información recibida a sus subordinados
+    \item Mantienen sincronización completa de datos en el grupo
+    \item Coordinación inter-grupos con otros líderes
+    \item Gestión de replicación y consistencia de información
+\end{itemize}
+
+\textbf{Líder de Scrappers}:
+\begin{itemize}
+    \item \textbf{No replica información} --- mantiene función pura de procesamiento
+    \item Gestiona distribución de carga entre scrappers subordinados
+    \item Reporta estado del grupo sin distribuir datos de scrapping
+\end{itemize}
+
+\subsection{Recuperación ante Fallos de Liderazgo}
+
+\subsubsection{Detección de Fallos}
+\begin{itemize}
+    \item Monitoreo mediante heartbeat entre nodos
+    \item Timeout de comunicación para detectar nodos caídos
+    \item Verificación periódica del estado de conexiones
+\end{itemize}
+
+\subsubsection{Reelección Automática}
+Cuando el líder actual falla:
+\begin{enumerate}
+    \item Los nodos detectan la pérdida de comunicación con el líder
+    \item Reinicio del proceso de elección bully
+    \item El nodo con la segunda IP más alta asume el liderazgo
+    \item Reestablecimiento de conexiones inter-grupos
+    \item Continuidad operativa sin intervención manual
+\end{enumerate}
+
+\subsubsection{Garantías del Sistema}
+\begin{itemize}
+    \item \textbf{Disponibilidad}: Reelección automática sin interrupción de servicio
+    \item \textbf{Consistencia}: Un único líder por grupo en todo momento
+    \item \textbf{Determinismo}: Resultado predecible basado en IPs
+    \item \textbf{Escalabilidad}: Incorporación transparente de nuevos nodos
+\end{itemize}
+
 \section{Componente Scrapper: Nodo Worker Especializado}
 
 \subsection{Descripción General}
 
-El componente \textbf{Scrapper} constituye la capa de procesamiento del sistema distribuido, implementado como un \textbf{nodo worker puro} y especializado. Su función es estrictamente operativa: recibir una URL específica, ejecutar el proceso de scrapping web y retornar el resultado estructurado.
+El componente \textbf{Scrapper} constituye la capa de procesamiento del sistema distribuido, organizado jerárquicamente con un \textbf{líder que coordina y distribuye tareas} entre los \textbf{nodos subordinados}. La función del líder es recibir URLs de los enrutadores y distribuirlas entre sus workers subordinados, adem\'as de, como sus subordinados, ejecutar el scrapping web y retornar resultados estructurados.
 
 \subsubsection{Principios de Diseño del Worker con Coordinación}
 \begin{itemize}
@@ -178,11 +275,10 @@ El componente \textbf{Scrapper} constituye la capa de procesamiento del sistema 
     \item \textbf{Worker puro}: No replica información, solo procesa URLs (URL → Resultado)
     \item \textbf{Participación en liderazgo}: Vota por líder y acepta coordinación del grupo
     \item \textbf{Stateless para datos}: No mantiene estado de scrapping entre tareas
-    \item \textbf{Coordinación sin replicación}: Participa en elección de líder pero no distribuye información
     \item \textbf{Escalabilidad horizontal}: Permite instanciación múltiple con coordinación automática
 \end{itemize}
 
-Cada instancia de scrapper participa en el sistema de liderazgo distribuido de su grupo, votando por líderes y aceptando coordinación, pero mantiene su especialización como worker puro. El líder scrapper actúa como coordinador con otros grupos, pero \textbf{no replica información de scrapping} a los subordinados, manteniendo la simplicidad operativa.
+Cada instancia de scrapper participa en el sistema de liderazgo distribuido de su grupo. El líder scrapper actúa como coordinador con otros grupos, y transmite las direcciones de los otros líderes con los que interactúa a sus subordinados en caso de cambios en la topología o fallos detectados.
 
 \subsection{Arquitectura del Scrapper}
 
@@ -207,61 +303,9 @@ El scrapper está implementado a través de la clase \texttt{ScrapperNode}, que 
 
 \subsection{Funcionalidades Principales}
 
-\subsubsection{Autodescubrimiento de Servicios}
-
-El scrapper implementa un mecanismo de autodescubrimiento que permite detectar automáticamente coordinadores disponibles en la red:
-
-\begin{lstlisting}[language=Python, caption=Mecanismo de Autodescubrimiento]
-def listen_for_broadcasts(self):
-    """Escucha señales de broadcast de los coordinadores"""
-    broadcast_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    broadcast_socket.bind(('', self.broadcast_port))
-    
-    while not self.connected:
-        data, addr = broadcast_socket.recvfrom(1024)
-        message = json.loads(data.decode())
-        
-        if message.get('type') == 'coordinator_discovery':
-            coordinator_host = message.get('coordinator_host')
-            coordinator_port = message.get('coordinator_port')
-            
-            if self.connect_to_server():
-                break
-\end{lstlisting}
-
-\textbf{Ventajas del autodescubrimiento}:
-\begin{itemize}
-    \item Eliminación de configuración manual de endpoints
-    \item Detección automática de coordinadores en la red
-    \item Adaptabilidad a cambios en la topología de red
-    \item Simplificación del despliegue de nuevos nodos
-\end{itemize}
-
 \subsubsection{Gestión de Conexiones}
 
-El sistema implementa un modelo de conexiones persistentes con gestión de hilos especializada:
-
-\begin{lstlisting}[language=Python, caption=Gestión de Conexiones Persistentes]
-def _send_worker(self):
-    """Hilo que envía mensajes desde la cola"""
-    while self.connected and not self.stop_event.is_set():
-        try:
-            message = self.message_queue.get(timeout=1.0)
-            if message is None:
-                break
-                
-            # Protocolo de envio con longitud prefijada
-            length = len(message)
-            self.socket.send(length.to_bytes(2, 'big'))
-            self.socket.send(message)
-            
-        except queue.Empty:
-            continue
-        except Exception as e:
-            logging.error(f"Error enviando mensaje: {e}")
-            self.connected = False
-            break
-\end{lstlisting}
+El sistema implementa un modelo de conexiones persistentes con gestión de hilos especializada, utilizando protocolos binarios optimizados y colas de mensajes thread-safe.
 
 \textbf{Características de la gestión de conexiones}:
 \begin{itemize}
@@ -273,70 +317,11 @@ def _send_worker(self):
 
 \subsubsection{Procesamiento de Tareas de Scrapping}
 
-El núcleo del procesamiento de tareas integra el módulo especializado \texttt{scrapper.py}:
-
-\begin{lstlisting}[language=Python, caption=Ejecución de Tareas de Scrapping]
-def execute_task(self, task_id, task_data):
-    """Ejecuta la tarea asignada"""
-    logging.info(f"Ejecutando tarea {task_id}: {task_data}")
-    
-    # Marcar como ocupado
-    self.update_busy_status(True)
-    
-    try:
-        url = task_data['url']
-        
-        # Realizar scrapping usando módulo especializado
-        scrape_result = get_html_from_url(url)
-        
-        # Preparar resultado optimizado
-        result = {
-            'url': scrape_result['url'],
-            'html_length': len(scrape_result['html']),
-            'links_count': len(scrape_result['links']),
-            'links': scrape_result['links'][:10],  # Primeros 10 enlaces
-            'status': 'success'
-        }
-        
-    except Exception as e:
-        result = {
-            'status': 'error',
-            'error': str(e)
-        }
-    finally:
-        # Marcar como disponible
-        self.update_busy_status(False)
-\end{lstlisting}
-
-\textbf{Optimizaciones implementadas}:
-\begin{itemize}
-    \item \textbf{Gestión de estado automática}: Actualización automática de disponibilidad
-    \item \textbf{Resultados optimizados}: Transmisión de metadata en lugar de contenido completo
-    \item \textbf{Manejo robusto de errores}: Captura y reporte de fallos sin afectar el sistema
-    \item \textbf{Integración modular}: Uso del módulo \texttt{scrapper.py} sin modificaciones
-\end{itemize}
+El núcleo del procesamiento de tareas integra el módulo especializado \texttt{scrapper.py}, que implementa el scrapping web utilizando librerías como \texttt{requests} y \texttt{BeautifulSoup}.
 
 \subsubsection{Sistema de Heartbeat y Monitoreo}
 
-Implementación de un sistema de latidos para mantener la conectividad:
-
-\begin{lstlisting}[language=Python, caption=Sistema de Heartbeat]
-def send_heartbeat(self):
-    """Envía señal periódica al servidor"""
-    while self.connected:
-        try:
-            heartbeat_msg = {
-                'type': 'heartbeat',
-                'client_id': self.client_id,
-                'time_now': datetime.now().isoformat()
-            }
-            
-            self._enqueue_message(heartbeat_msg)
-            time.sleep(60)  # Heartbeat cada 60 segundos
-            
-        except Exception:
-            self.connected = False
-\end{lstlisting}
+Implementación de un sistema de latidos para mantener la conectividad mediante señales periódicas cada 60 segundos que incluyen identificación del cliente y timestamp para monitoreo de conectividad.
 
 \subsection{Ventajas del Diseño Distribuido del Scrapper}
 
@@ -358,15 +343,106 @@ def send_heartbeat(self):
 \begin{itemize}
     \item Procesamiento paralelo de múltiples URLs
     \item Utilización optimizada de recursos de red
-    \item Balanceado automático de carga de trabajo
+    \item Balanceo automático de carga de trabajo
 \end{itemize}
 
-\subsubsection{Flexibilidad de Despliegue}
+\section{Componente Enrutador: Nodo de Comunicación y Gestión de Peticiones}
+
+\subsection{Descripción General}
+
+Los nodos enrutadores constituyen la capa de comunicación del sistema distribuido, actuando como intermediarios que gestionan las peticiones de los clientes y facilitan la comunicación entre los diferentes grupos de nodos. Su función principal es recibir consultas sobre información almacenada y URLs a procesar, transmitiendo esta información a los líderes correspondientes de cada grupo.
+
+\subsubsection{Funciones Principales del Enrutador}
 \begin{itemize}
-    \item Despliegue en múltiples máquinas físicas
-    \item Compatibilidad con contenedores Docker
-    \item Integración con orquestadores como Docker Swarm
+    \item \textbf{Gestión de peticiones de clientes}: Reciben consultas sobre datos scrapeados almacenados
+    \item \textbf{Recepción de URLs}: Punto de entrada para nuevas tareas de scrapping
+    \item \textbf{Transmisión inter-grupos}: Facilitan comunicación entre líderes de diferentes grupos
+    \item \textbf{Coordinación de respuestas}: Recolectan y organizan respuestas para los clientes
+    \item \textbf{Indexaci\'on de respuestas}: Mantienen un índice de URLs procesadas y sus ubicaciones en base de datos, concretamente las IPs de los nodos BD donde se almacenan los datos scrapeados
 \end{itemize}
+
+\subsection{Arquitectura del Enrutador}
+
+El nodo enrutador utiliza la arquitectura común de comunicación descrita en la sección de balanceo de carga, especializándose en:
+\begin{itemize}
+    \item Gestión de peticiones de clientes externos
+    \item Coordinación entre líderes de diferentes grupos
+    \item Distribución de URLs de scrapping a procesar
+    \item Recolección y organización de respuestas
+\end{itemize}
+
+\subsubsection{Responsabilidades del Líder Enrutador}
+\begin{itemize}
+    \item Establecimiento de conexión socket con líder de BD
+    \item Búsqueda activa de servicios de otros roles
+    \item Envío de URLs a procesar al líder del grupo scrapper
+    \item Proporciona IP del líder BD para almacenamiento directo
+    \item Coordina el flujo de información entre grupos
+\end{itemize}
+
+\section{Componente Base de Datos: Nodo de Almacenamiento y Persistencia}
+
+\subsection{Descripción General}
+
+Los nodos de base de datos constituyen la capa de persistencia del sistema, encargados de almacenar la información extraída por los scrappers y gestionar la replicación de datos para garantizar disponibilidad y consistencia. Implementan un sistema de liderazgo distribuido con replicación aleatoria y gestión de logs para recuperación ante fallos.
+
+\subsubsection{Funciones Principales}
+\begin{itemize}
+    \item \textbf{Almacenamiento de datos}: Persistencia de información scrapeada
+    \item \textbf{Replicación distribuida}: Almacenamiento en múltiples nodos (típicamente 3 réplicas)
+    \item \textbf{Gestión de logs}: Registro de operaciones para recuperación
+    \item \textbf{Coordinación de acceso}: Facilitación de consultas de datos almacenados
+\end{itemize}
+
+\subsection{Arquitectura de Base de Datos}
+
+Los nodos BD utilizan la arquitectura común de comunicación, especializándose en:
+
+\subsubsection{Especialización para Almacenamiento}
+\begin{itemize}
+    \item Recepción directa de datos desde nodos scrapper
+    \item Procesamiento de información estructurada
+    \item Gestión de metadatos y logs de operaciones
+    \item Coordinación de replicación entre nodos BD
+\end{itemize}
+
+\subsubsection{Responsabilidades del Líder BD}
+\begin{itemize}
+    \item \textbf{Gestión de replicación}: Selección aleatoria de 3 nodos BD para almacenamiento
+    \item \textbf{Coordinación con enrutador}: Envío de tuplas (URL, IPs) con ubicaciones de datos
+    \item \textbf{Gestión de logs}: Almacenamiento de logs de todos los nodos no-líderes
+    \item \textbf{Recuperación ante fallos}: Reconstrucción de nodos caídos mediante logs
+\end{itemize}
+
+\subsection{Estrategia de Replicación y Recuperación}
+
+\subsubsection{Replicación Aleatoria}
+\textbf{Proceso de Almacenamiento}:
+\begin{enumerate}
+    \item Recepción de información desde scrapper
+    \item Selección aleatoria de 3 nodos BD para replicación
+    \item Distribución de datos a nodos seleccionados
+    \item Envío de tupla (URL, IPs\_almacenamiento) al líder enrutador
+    \item Registro de operación en logs para trazabilidad
+\end{enumerate}
+
+\subsubsection{Recuperación ante Fallos}
+\textbf{Caída de Nodo No-Líder}:
+\begin{enumerate}
+    \item Detección de fallo mediante ausencia de heartbeat
+    \item Incorporación de nuevo nodo BD al grupo
+    \item Reconstrucción usando logs almacenados por el líder
+    \item Restauración de réplicas y mantenimiento de factor de replicación
+\end{enumerate}
+
+\textbf{Caída del Líder BD}:
+\begin{enumerate}
+    \item Elección automática de nuevo líder (algoritmo bully)
+    \item Envío de logs locales al nuevo líder por parte de todos los nodos
+    \item Consolidación de información de logs distribuidos
+    \item Restablecimiento de función de liderazgo y coordinación
+    \item Continuidad de replicación usando logs históricos
+\end{enumerate}
 
 \section{Flujo de Datos y Comunicación Inter-Nodos}
 
@@ -376,33 +452,35 @@ El sistema implementa un pipeline de datos distribuido que sigue el siguiente fl
 
 \begin{enumerate}
     \item \textbf{Entrada de URLs}: Las URLs a procesar ingresan al sistema a través del Gateway API
-    \item \textbf{Distribución}: Los nodos enrutadores reciben las URLs y las distribuyen entre nodos scrapper disponibles
-    \item \textbf{Procesamiento}: Los nodos scrapper ejecutan el scrapping de manera independiente
-    \item \textbf{Recolección}: Los nodos enrutadores recolectan los resultados exitosos
-    \item \textbf{Persistencia}: Los datos procesados se envían a los nodos de base de datos para almacenamiento
+    \item \textbf{Recepción}: Los nodos enrutadores reciben las peticiones y las transmiten al líder correspondiente
+    \item \textbf{Distribución de Tareas}: Los \textbf{líderes de cada grupo} distribuyen las tareas entre sus nodos subordinados
+    \item \textbf{Procesamiento}: Los nodos scrapper ejecutan el scrapping de manera independiente bajo coordinación de su líder
+    \item \textbf{Recolección}: Los líderes recolectan resultados y coordinan con otros líderes
+    \item \textbf{Transmisión}: Los enrutadores transmiten la información entre líderes de diferentes grupos
+    \item \textbf{Persistencia}: Los datos procesados llegan al líder de BD para distribución y almacenamiento
 \end{enumerate}
 
 \subsection{Patrones de Comunicación}
 
-\subsubsection{Enrutador → Scrapper}
+\subsubsection{Enrutador → Líder Scrapper}
 \begin{itemize}
-    \item \textbf{Tipo}: Comunicación síncrona punto a punto
-    \item \textbf{Contenido}: URL específica con metadatos de tarea
-    \item \textbf{Protocolo}: TCP con heartbeat para detección de fallos
+    \item \textbf{Tipo}: Transmisión de información entre líderes
+    \item \textbf{Contenido}: URLs recibidas de clientes
+    \item \textbf{Protocolo}: Comunicación líder a líder
 \end{itemize}
 
-\subsubsection{Scrapper → Enrutador}
+\subsubsection{Líder Scrapper → Subordinados Scrapper}
 \begin{itemize}
-    \item \textbf{Tipo}: Respuesta con resultado de procesamiento
-    \item \textbf{Contenido}: Datos extraídos o información de error
-    \item \textbf{Condición}: Solo si el scrapping fue exitoso
+    \item \textbf{Tipo}: Distribución real de tareas dentro del grupo
+    \item \textbf{Contenido}: URLs específicas asignadas por el líder
+    \item \textbf{Responsable}: El líder scrapper gestiona la distribución
 \end{itemize}
 
-\subsubsection{Enrutador → Base de Datos}
+\subsubsection{Scrapper → Líder Base de Datos}
 \begin{itemize}
-    \item \textbf{Tipo}: Almacenamiento asíncrono de resultados
-    \item \textbf{Contenido}: Datos estructurados procesados
-    \item \textbf{Garantía}: Solo datos exitosamente scrapeados
+    \item \textbf{Tipo}: Envío directo de resultados
+    \item \textbf{Contenido}: Datos extraídos procesados
+    \item \textbf{Optimización}: Evita doble salto de información
 \end{itemize}
 
 \subsection{Tolerancia a Fallos y Mecanismos de Recuperación}
@@ -435,128 +513,86 @@ Como medida adicional de tolerancia a fallos, cada nodo implementa un \textbf{si
     \item Mantenimiento de conectividad entre nodos conocidos
 \end{itemize}
 
-\section{Sistema de Liderazgo Distribuido con Algoritmo Bully}
 
-\subsection{Arquitectura de Grupos Interconectados}
 
-El sistema implementa una arquitectura jerárquica donde cada grupo de nodos (exceptuando los nodos scrapper) está completamente interconectado, formando clusters de alta disponibilidad con replicación automática de información.
+\section{Consistencia y Replicación de Datos}
 
-\subsubsection{Principios de Interconexión y Organización}
-\textbf{Grupos con Liderazgo Distribuido}:
+\subsection{Estrategias de Distribución de Datos}
+
+\subsubsection{Modelo de Replicación por Grupos}
+El sistema implementa diferentes estrategias de replicación según el tipo de nodo:
+
 \begin{itemize}
-    \item \textbf{Grupo Base de Datos}: Todos los nodos BD interconectados con replicación completa de información
-    \item \textbf{Grupo Enrutadores}: Todos los enrutadores interconectados con replicación de estado y tareas
-    \item \textbf{Grupo Scrappers}: Organizados con liderazgo pero \textbf{sin replicación de información}, solo coordinación
-\end{itemize}
-
-\textbf{Comportamiento Diferenciado por Grupo}:
-\begin{itemize}
-    \item \textbf{Base de Datos y Enrutadores}: Replicación automática de toda información recibida
-    \item \textbf{Scrappers}: Participan en elección de líder y coordinación, pero \textbf{no replican información}
-    \item \textbf{Función especializada}: Los scrappers mantienen su rol puro de procesamiento de URLs
-    \item \textbf{Coordinación sin replicación}: El líder scrapper coordina con otros grupos pero no distribuye datos internamente
-\end{itemize}
-
-\subsection{Implementación del Algoritmo Bully}
-
-\subsubsection{Elección de Líderes en Todos los Grupos}
-Para asegurar coordinación y organización, \textbf{todos los grupos de nodos} (incluyendo Base de Datos, Enrutadores y Scrappers) utilizan el \textbf{Algoritmo Bully} para la elección democrática de líderes:
-
-\textbf{Proceso de Elección}:
-\begin{enumerate}
-    \item \textbf{Detección de fallo}: Los nodos detectan la desconexión del líder actual
-    \item \textbf{Inicio de elecciones}: Cualquier nodo puede iniciar el proceso de elección
-    \item \textbf{Votación distribuida}: Los nodos participan en la votación según el algoritmo bully
-    \item \textbf{Elección del nuevo líder}: El nodo con mayor prioridad se convierte en líder
-    \item \textbf{Anuncio inter-grupos}: El nuevo líder se comunica con otros grupos para anunciar su cargo
-\end{enumerate}
-
-\subsubsection{Roles y Responsabilidades del Líder por Tipo de Grupo}
-\textbf{Funciones Comunes del Líder (``Jefe'') en Todos los Grupos}:
-\begin{itemize}
-    \item \textbf{Representante del grupo}: Actúa como único punto de comunicación con otros grupos
-    \item \textbf{Comunicación inter-grupos}: Envía y recibe información desde/hacia líderes de otros grupos
-    \item \textbf{Coordinación de operaciones}: Mantiene la organización y sincronización dentro del grupo
-\end{itemize}
-
-\textbf{Responsabilidades Diferenciadas}:
-\begin{itemize}
-    \item \textbf{Líderes de Base de Datos y Enrutadores}: 
+    \item \textbf{Grupos de Base de Datos}: Replicación completa (Full Replication)
     \begin{itemize}
-        \item Replican toda información recibida a sus subordinados
-        \item Mantienen sincronización completa de datos en el grupo
-        \item Garantizan consistencia de información
+        \item Cada nodo BD mantiene copia completa de todos los datos
+        \item Sincronización inmediata tras cada escritura
+        \item Consistencia fuerte dentro del grupo
     \end{itemize}
-    \item \textbf{Líder de Scrappers}:
+    \item \textbf{Grupos de Coordinadores}: Replicación de estado
     \begin{itemize}
-        \item \textbf{No replica información} - Los scrappers mantienen su función pura: procesamiento de URLs
-        \item Coordina disponibilidad de workers con otros grupos
-        \item Gestiona distribución de carga entre scrappers subordinados
-        \item Reporta estado del grupo pero no distribuye datos de scrapping
+        \item Estado del sistema y decisiones replicadas
+        \item Información de nodos activos sincronizada
+        \item Configuraciones y políticas distribuidas
+    \end{itemize}
+    \item \textbf{Grupos de Scrappers}: Sin replicación de datos
+    \begin{itemize}
+        \item Cada scrapper mantiene solo su estado local
+        \item Resultados enviados directamente a coordinadores
+        \item Funcionalidad pura sin persistencia
     \end{itemize}
 \end{itemize}
 
-\textbf{Comunicación Jerárquica}:
+\subsubsection{Cantidad y Distribución de Réplicas}
+\textbf{Política de Replicación}:
 \begin{itemize}
-    \item \textbf{Líder $\leftrightarrow$ Líder}: Comunicación directa entre líderes de diferentes grupos
-    \item \textbf{Líder $\rightarrow$ Subordinados}: Replicación de información dentro del grupo y asignación de tareas
-    \item \textbf{Subordinados $\rightarrow$ Líder}: Reportes de estado y solicitudes de coordinación
+    \item \textbf{Factor de Replicación}: Mínimo 3 réplicas por dato crítico
+    \item \textbf{Distribución Geográfica}: Réplicas en diferentes nodos físicos
+    \item \textbf{Algoritmo de Distribución}: \textbf{Selección aleatoria} de nodos destino
+    \item \textbf{Simplicidad}: Sin balanceado de carga complejo por ahora
 \end{itemize}
 
-\subsection{Recuperación ante Fallos de Liderazgo}
+El sistema implementa replicación mediante selección aleatoria de nodos disponibles, manteniendo un mínimo de 3 réplicas por dato crítico cuando sea posible.
 
-\subsubsection{Detección de Fallos del Líder}
-\textbf{Mecanismos de Detección}:
+\subsection{Confiabilidad de Réplicas tras Actualizaciones}
+
+\subsubsection{Protocolo de Consistencia}
+\textbf{Garantías de Consistencia}:
 \begin{itemize}
-    \item \textbf{Heartbeat monitoring}: Los subordinados monitorean constantemente al líder
-    \item \textbf{Timeout de comunicación}: Fallos detectados por ausencia de respuesta
-    \item \textbf{Verificación distribuida}: Múltiples nodos confirman el fallo antes de actuar
+    \item \textbf{Consistencia Eventual}: Para datos no críticos
+    \item \textbf{Consistencia Fuerte}: Para datos del sistema y configuraciones
+    \item \textbf{Ordenamiento de Escrituras}: Timestamps para resolver conflictos
 \end{itemize}
 
-\subsubsection{Proceso de Recuperación}
-\textbf{Secuencia de Recuperación}:
+\textbf{Mecanismos de Verificación}:
+\begin{itemize}
+    \item \textbf{Checksums}: Verificación de integridad de datos replicados
+    \item \textbf{Heartbeat con Estado}: Inclusión de información de consistencia
+    \item \textbf{Reconciliación Periódica}: Comparación y corrección de diferencias
+\end{itemize}
+
+\subsubsection{Recuperación ante Inconsistencias}
 \begin{enumerate}
-    \item \textbf{Detección consensuada}: Los miembros restantes confirman la desconexión del líder
-    \item \textbf{Llamada a elecciones}: Los nodos supervivientes inician el proceso de elección
-    \item \textbf{Votación por nuevo líder}: Aplicación del algoritmo bully para selección
-    \item \textbf{Anuncio del nuevo líder}: Comunicación del cambio a otros grupos
-    \item \textbf{Reanudación de operaciones}: Continuación de actividades bajo el nuevo liderazgo
+    \item \textbf{Detección}: Identificación de réplicas inconsistentes
+    \item \textbf{Votación}: Determinación de versión correcta mediante consenso
+    \item \textbf{Corrección}: Actualización de réplicas incorrectas
+    \item \textbf{Verificación}: Confirmación de consistencia restaurada
 \end{enumerate}
 
-\textbf{Garantías del Sistema}:
-\begin{itemize}
-    \item \textbf{Continuidad operativa}: Las operaciones se reanudan automáticamente
-    \item \textbf{Prevención de problemas de coordinación}: El algoritmo bully evita conflictos de liderazgo
-    \item \textbf{Transparencia para otros grupos}: El cambio de liderazgo es comunicado externamente
-    \item \textbf{Mantenimiento de jerarquía}: La estructura de comunicación se preserva
-\end{itemize}
 
-\subsection{Ventajas de la Arquitectura de Liderazgo}
-
-\subsubsection{Beneficios Operacionales}
-\begin{itemize}
-    \item \textbf{Coordinación eficiente}: Un solo punto de comunicación por grupo reduce la complejidad
-    \item \textbf{Escalabilidad de comunicación}: O(n) comunicaciones entre grupos en lugar de O(n²)
-    \item \textbf{Consistencia de datos}: La replicación centralizada garantiza sincronización
-    \item \textbf{Recuperación rápida}: El algoritmo bully proporciona elección de líder determinística
-\end{itemize}
-
-\subsubsection{Tolerancia a Fallos Mejorada}
-\begin{itemize}
-    \item \textbf{Redundancia activa}: Múltiples nodos pueden asumir el liderazgo
-    \item \textbf{Elección automática}: Sin intervención manual en la recuperación
-    \item \textbf{Preservación de operaciones}: Continuidad garantizada ante fallos de liderazgo
-    \item \textbf{Comunicación resiliente}: Respaldo por IP cache ante fallos de DNS
-\end{itemize}
 
 \section{Conclusiones Parciales}
 
 La arquitectura de tres capas con sistema de liderazgo distribuido proporciona una solución robusta y escalable para el procesamiento distribuido de web scrapping. La combinación del algoritmo bully para elección de líderes, la replicación automática de información y el sistema de IP cache para tolerancia a fallos de DNS, resulta en un sistema altamente resiliente.
 
-El diseño jerárquico con líderes en todos los grupos optimiza la comunicación inter-grupos mientras mantiene redundancia y capacidad de recuperación automática ante fallos. Los nodos scrapper, aunque participan en el sistema de liderazgo distribuido, mantienen su especialización como workers puros al no replicar información, garantizando simplicidad operativa y máxima escalabilidad horizontal con coordinación inteligente.
+El diseño de microservicios puros con threading multi-propósito optimiza el uso de recursos mientras mantiene separación clara de responsabilidades. La distribución en redes Docker overlay facilita el escalado horizontal y la gestión de servicios distribuidos geográficamente.
 
-Las características implementadas, como el autodescubrimiento de servicios, la gestión de conexiones persistentes y el sistema de heartbeat, demuestran la aplicación práctica de conceptos fundamentales de sistemas distribuidos en un contexto real de procesamiento de datos web.
+El sistema de replicación diferenciado por grupos --- con replicación completa para datos críticos y especialización sin replicación para workers --- proporciona un balance óptimo entre consistencia, rendimiento y escalabilidad. Los mecanismos de consistencia eventual y fuerte, según el tipo de datos, garantizan la integridad del sistema.
 
-% Pendiente: Secciones sobre Coordinador, Gateway API, Sistema de Descubrimiento, Resultados Experimentales, etc.
+El diseño jerárquico con líderes en todos los grupos optimiza la comunicación inter-grupos mientras mantiene redundancia y capacidad de recuperación automática ante fallos. Los nodos scrapper, aunque participan en el sistema de liderazgo distribuido, mantienen su especialización como workers puros, garantizando simplicidad operativa y máxima escalabilidad horizontal con coordinación inteligente.
+
+Las características implementadas, como el autodescubrimiento de servicios mediante DNS de Docker, la gestión de conexiones persistentes con threading especializado, el sistema de heartbeat distribuido y las estrategias de replicación adaptativas, demuestran la aplicación integral de conceptos fundamentales de sistemas distribuidos en un contexto real de procesamiento de datos web.
+
+% Pendiente: Secciones sobre Coordinador (implementación detallada), Gateway API, Resultados Experimentales y Análisis de Rendimiento
 
 \end{document}
