@@ -99,7 +99,7 @@ El presente proyecto implementa un \textbf{Sistema de Scrapping Web Distribuido}
 El scrapping web tradicional, ejecutado en un solo servidor, presenta limitaciones significativas:
 
 \begin{itemize}
-    \item \textbf{Limitaciones de rendimiento}: Un solo nodo puede procesar un número limitado de páginas web simultáneamente
+    \item \textbf{Limitaciones de rendimiento}: Un \'unico nodo solo puede procesar un número limitado de páginas web simultáneamente
     \item \textbf{Falta de escalabilidad}: No es posible aumentar la capacidad de procesamiento dinámicamente
     \item \textbf{Punto único de falla}: El sistema completo se ve afectado si el servidor único falla
     \item \textbf{Ineficiencia en recursos}: No aprovecha completamente los recursos disponibles en múltiples máquinas
@@ -118,7 +118,7 @@ Desarrollar un sistema distribuido que permita realizar scrapping web de manera 
     \item \textbf{Coordinación inteligente}: Implementar nodos enrutadores que gestionen eficientemente la distribución de tareas y recolección de resultados
     \item \textbf{Persistencia confiable}: Desarrollar nodos de base de datos que garanticen el almacenamiento seguro de información scrapeada
     \item \textbf{Sistema de liderazgo distribuido}: Implementar algoritmo bully para elección automática de líderes en cada grupo de nodos
-    \item \textbf{Tolerancia a fallos multi-nivel}: Desarrollar mecanismos de recuperación que incluyan IP cache para fallos de DNS y elección automática de líderes
+    \item \textbf{Tolerancia a fallos multi-nivel}: Desarrollar mecanismos de recuperación que incluyan IP caché para fallos de DNS y elección automática de líderes
     \item \textbf{Replicación automática}: Garantizar que la información se replique automáticamente entre nodos del mismo grupo
     \item \textbf{Filtrado de calidad}: Asegurar que solo datos exitosamente scrapeados lleguen a la capa de persistencia
 \end{enumerate}
@@ -494,18 +494,18 @@ El sistema implementa un pipeline de datos distribuido que sigue el siguiente fl
     \item \textbf{Heartbeat continuo}: Detección temprana de nodos no responsivos
 \end{itemize}
 
-\subsubsection{IP Cache para Recuperación de DNS}
+\subsubsection{IP caché para Recuperación de DNS}
 Como medida adicional de tolerancia a fallos, cada nodo implementa un \textbf{sistema de caché de IPs} que proporciona resiliencia ante fallos del servicio DNS de Docker:
 
-\textbf{Características del IP Cache}:
+\textbf{Características del IP caché}:
 \begin{itemize}
     \item \textbf{Registro automático}: Cada nodo mantiene un registro de IPs de nodos con los que ha interactuado previamente
     \item \textbf{Recuperación ante fallos de DNS}: Si el servicio DNS de Docker falla, los nodos pueden continuar comunicándose usando las IPs cacheadas
-    \item \textbf{Persistencia local}: El cache se mantiene localmente en cada nodo para acceso rápido
+    \item \textbf{Persistencia local}: El caché se mantiene localmente en cada nodo para acceso rápido
     \item \textbf{Actualización dinámica}: Las IPs se actualizan automáticamente durante las comunicaciones exitosas
 \end{itemize}
 
-\textbf{Ventajas del IP Cache}:
+\textbf{Ventajas del IP caché}:
 \begin{itemize}
     \item Continuidad operativa ante fallos de infraestructura
     \item Reducción de dependencias externas críticas
@@ -583,7 +583,7 @@ El sistema implementa replicación mediante selección aleatoria de nodos dispon
 
 \section{Conclusiones Parciales}
 
-La arquitectura de tres capas con sistema de liderazgo distribuido proporciona una solución robusta y escalable para el procesamiento distribuido de web scrapping. La combinación del algoritmo bully para elección de líderes, la replicación automática de información y el sistema de IP cache para tolerancia a fallos de DNS, resulta en un sistema altamente resiliente.
+La arquitectura de tres capas con sistema de liderazgo distribuido proporciona una solución robusta y escalable para el procesamiento distribuido de web scrapping. La combinación del algoritmo bully para elección de líderes, la replicación automática de información y el sistema de IP caché para tolerancia a fallos de DNS, resulta en un sistema altamente resiliente.
 
 El diseño de microservicios puros con threading multi-propósito optimiza el uso de recursos mientras mantiene separación clara de responsabilidades. La distribución en redes Docker overlay facilita el escalado horizontal y la gestión de servicios distribuidos geográficamente.
 
