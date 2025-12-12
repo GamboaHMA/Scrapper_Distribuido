@@ -140,17 +140,6 @@ class ServiceDiscoverer:
         def rm_nums(cadena:str):
             return ''.join(car for car in cadena if not car.isdigit())
 
-        try:
-            name0 = socket.gethostbyname(self.name + '0')
-            logging.info(f"name0: {name0}")
-        except Exception as e:
-            logging.info(f"name0 no encontrado: {e}")
-        try:
-            name1 = socket.gethostbyname(self.name + '1')
-            logging.info(f"name1: {name1}")
-        except Exception as e:
-            logging.info(f"name1 no encontrado: {e}")
-
         # el --name de los contenedores es el mismo que el --network-alias, solo que --name tiene digitos
         while True:
             try:
@@ -288,6 +277,8 @@ class ServiceDiscoverer:
             except Exception as e:
                 logging.error(f"Error al enviar un latido: {e}")
     
+    
+
     #===================funcionalidades del nodo====================
 
     #========================Bucle principal========================
@@ -319,7 +310,6 @@ class ServiceDiscoverer:
             logging.info(f"Mensaje a {peer_name} ({peer_ip}): {msg}")
         except Exception as e:
             logging.error(f"Error comunicando con {peer_name}: {e}")
-
 
     def conexion_valida(self, destino):
         """Verifica si ya existe una conexión activa al destino."""
