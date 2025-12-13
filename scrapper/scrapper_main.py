@@ -69,6 +69,11 @@ class ScrapperNode2():
         # Socket de escucha para conexiones entrantes
         self.listen_socket = None
         self.listen_thread = None
+        
+        # Hilo de monitoreo de heartbeats
+        self.heartbeat_monitor_thread = None
+        self.heartbeat_timeout = 90  # segundos sin heartbeat antes de considerar muerto
+        self.heartbeat_check_interval = 30  # revisar cada 30 segundos
     
     def _handle_message_from_node(self, node_connection, message_dict):
         """
@@ -94,13 +99,17 @@ class ScrapperNode2():
             node_connection.is_busy = message_dict.get('is_busy', False)
             logging.info(f"Estado actualizado para {node_connection.node_id}: busy={node_connection.is_busy}")
         
-        elif msg_type == 'election':
-            # Mensaje de elección recibido
-            self._handle_election_message(node_connection, message_dict)
+        # elif msg_type == 'election':
+        #     # Mensaje de elección recibido
+        #     self._handle_election_message(node_connection, message_dict)
         
-        elif msg_type == 'election_response':
-            # Respuesta a elección (alguien con IP mayor está vivo)
-            self._handle_election_response(node_connection, message_dict)
+        # elif msg_type == 'election_response':
+        #     # Respuesta a elección (alguien con IP mayor está vivo)
+        #     self._handle_election_response(node_connection, message_dict)
+        
+        # elif msg_type == 'new_boss':
+        #     # Anuncio de nuevo jefe
+        #     self._handle_new_boss_announcement(node_connection, message_dict)
             
         else:
             logging.warning(f"Tipo de mensaje desconocido de {node_connection.node_id}: {msg_type}")
@@ -198,6 +207,227 @@ class ScrapperNode2():
                 'is_busy': self.is_busy
             })
             time.sleep(30)  # Heartbeat cada 30 segundos
+    
+    def send_temporary_message(self, target_ip, target_port, message_dict, 
+                               expect_response=False, timeout=3.0):
+        """
+        Envía un mensaje temporal a un nodo sin mantener la conexión.
+        Encapsula toda la lógica de: crear socket -> conectar -> enviar -> recibir (opcional) -> cerrar.
+        
+        Este método es útil para comunicación one-shot donde no necesitas mantener
+        una conexión persistente. Maneja automáticamente el protocolo de longitud + mensaje,
+        errores de conexión, timeouts y limpieza de recursos.
+        
+        Args:
+            target_ip (str): IP del nodo destino
+            target_port (int): Puerto del nodo destino
+            message_dict (dict): Mensaje a enviar (será convertido a JSON)
+            expect_response (bool): Si True, espera y retorna la respuesta
+            timeout (float): Timeout para la conexión y recepción (en segundos)
+        
+        Returns:
+            dict o bool:
+                - Si expect_response=True: Retorna el mensaje de respuesta (dict) o None si falla
+                - Si expect_response=False: Retorna True si se envió exitosamente, False si falla
+        
+        Notas:
+            - El socket se cierra automáticamente al finalizar (éxito o error)
+            - Los errores se logean como DEBUG para no saturar los logs
+            - El protocolo usado es: 2 bytes (longitud) + mensaje JSON
+            - Thread-safe: cada llamada usa su propio socket temporal
+        """
+        temp_sock = None
+        try:
+            # Crear y configurar socket
+            temp_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            temp_sock.settimeout(timeout)
+            
+            # Conectar
+            temp_sock.connect((target_ip, target_port))
+            
+            # Serializar y enviar mensaje
+            message_bytes = json.dumps(message_dict).encode()
+            message_length = len(message_bytes)
+            
+            # Enviar longitud (2 bytes) + mensaje
+            temp_sock.send(message_length.to_bytes(2, 'big'))
+            temp_sock.send(message_bytes)
+            
+            logging.debug(f"Mensaje temporal enviado a {target_ip}:{target_port} - tipo: {message_dict.get('type', 'unknown')}")
+            
+            # Si se espera respuesta, recibirla
+            if expect_response:
+                # Recibir longitud de respuesta (2 bytes)
+                length_bytes = temp_sock.recv(2)
+                
+                if not length_bytes:
+                    logging.debug(f"No se recibió respuesta de {target_ip}:{target_port}")
+                    return None
+                
+                response_length = int.from_bytes(length_bytes, 'big')
+                
+                # Recibir respuesta completa
+                response_bytes = b''
+                while len(response_bytes) < response_length:
+                    chunk = temp_sock.recv(response_length - len(response_bytes))
+                    if not chunk:
+                        logging.debug(f"Conexión cerrada por {target_ip}:{target_port} durante recepción")
+                        return None
+                    response_bytes += chunk
+                
+                # Decodificar respuesta
+                response_dict = json.loads(response_bytes.decode())
+                logging.debug(f"Respuesta recibida de {target_ip}:{target_port} - tipo: {response_dict.get('type', 'unknown')}")
+                
+                return response_dict
+            else:
+                # No se espera respuesta, solo confirmar envío exitoso
+                return True
+        
+        except socket.timeout:
+            logging.debug(f"Timeout conectando/comunicando con {target_ip}:{target_port}")
+            return None if expect_response else False
+        
+        except ConnectionRefusedError:
+            logging.debug(f"Conexión rechazada por {target_ip}:{target_port}")
+            return None if expect_response else False
+        
+        except Exception as e:
+            logging.debug(f"Error en comunicación temporal con {target_ip}:{target_port}: {e}")
+            return None if expect_response else False
+        
+        finally:
+            # Siempre cerrar el socket
+            if temp_sock:
+                try:
+                    temp_sock.close()
+                except:
+                    pass
+    
+    def _heartbeat_monitor_loop(self):
+        """
+        Hilo que monitorea los heartbeats de todas las conexiones.
+        Si un nodo no ha enviado heartbeat en heartbeat_timeout segundos,
+        se considera muerto y se desconecta.
+        """
+        logging.info(f"Iniciando monitor de heartbeats (timeout: {self.heartbeat_timeout}s, check interval: {self.heartbeat_check_interval}s)")
+        
+        while self.running:
+            try:
+                time.sleep(self.heartbeat_check_interval)
+                
+                # Limpiar nodos muertos
+                self._cleanup_dead_nodes()
+                
+            except Exception as e:
+                logging.error(f"Error en monitor de heartbeats: {e}")
+    
+    def _cleanup_dead_nodes(self):
+        """
+        Verifica todas las conexiones y elimina las que han dejado de enviar heartbeats
+        o cuya conexión se ha cerrado.
+        """
+        dead_nodes = []
+        
+        # 1. Verificar jefe (si soy subordinado)
+        if not self.i_am_boss and self.boss_connection:
+            # Verificar si la conexión está cerrada
+            if not self.boss_connection.is_connected():
+                logging.warning(f"Jefe {self.boss_connection.node_id} desconectado (conexión cerrada)")
+                logging.warning("Iniciando elecciones para encontrar nuevo jefe...")
+                
+                # Desconectar del jefe muerto
+                self.boss_connection.disconnect()
+                self.boss_connection = None
+                
+                # Iniciar proceso de elección
+                threading.Thread(target=self.call_elections, daemon=True).start()
+            else:
+                # La conexión está activa, verificar heartbeat
+                time_since_heartbeat = self.boss_connection.get_time_since_last_heartbeat()
+                
+                if time_since_heartbeat is not None and time_since_heartbeat > self.heartbeat_timeout:
+                    logging.warning(f"Jefe {self.boss_connection.node_id} no responde (último heartbeat hace {time_since_heartbeat:.1f}s)")
+                    logging.warning("Iniciando elecciones para encontrar nuevo jefe...")
+                    
+                    # Desconectar del jefe muerto
+                    self.boss_connection.disconnect()
+                    self.boss_connection = None
+                    
+                    # Iniciar proceso de elección
+                    threading.Thread(target=self.call_elections, daemon=True).start()
+        
+        # 2. Verificar subordinados (si soy jefe)
+        if self.i_am_boss and self.subordinates:
+            for node_id, conn in list(self.subordinates.items()):
+                # Primero verificar si la conexión está cerrada
+                if not conn.is_connected():
+                    logging.warning(f"Subordinado {node_id} desconectado (conexión cerrada)")
+                    dead_nodes.append(node_id)
+                    continue
+                
+                # La conexión está activa, verificar heartbeat
+                time_since_heartbeat = conn.get_time_since_last_heartbeat()
+                
+                # Si nunca ha enviado heartbeat, darle más tiempo (puede estar iniciándose)
+                if time_since_heartbeat is None:
+                    continue
+                
+                if time_since_heartbeat > self.heartbeat_timeout:
+                    logging.warning(f"Subordinado {node_id} no responde (último heartbeat hace {time_since_heartbeat:.1f}s)")
+                    dead_nodes.append(node_id)
+            
+            # Eliminar subordinados muertos
+            for node_id in dead_nodes:
+                conn = self.subordinates[node_id]
+                logging.info(f"Desconectando subordinado muerto: {node_id}")
+                conn.disconnect()
+                del self.subordinates[node_id]
+                
+                # También remover de known_nodes
+                ip = conn.ip
+                if ip in self.known_nodes.get("scrapper", {}):
+                    del self.known_nodes["scrapper"][ip]
+                    logging.info(f"Nodo {ip} eliminado de nodos conocidos")
+            
+            if dead_nodes:
+                logging.info(f"Limpieza completada: {len(dead_nodes)} nodos eliminados")
+                logging.info(f"Subordinados activos: {len(self.subordinates)}")
+        
+        # 3. Verificar conexiones con otros jefes (BD, Router)
+        if self.bd_boss_connection:
+            # Verificar si la conexión está cerrada
+            if not self.bd_boss_connection.is_connected():
+                logging.warning(f"Jefe de BD desconectado (conexión cerrada)")
+                self.bd_boss_connection.disconnect()
+                self.bd_boss_connection = None
+                logging.info("Conexión con jefe de BD cerrada")
+            else:
+                # La conexión está activa, verificar heartbeat
+                time_since_heartbeat = self.bd_boss_connection.get_time_since_last_heartbeat()
+                
+                if time_since_heartbeat is not None and time_since_heartbeat > self.heartbeat_timeout:
+                    logging.warning(f"Jefe de BD no responde (último heartbeat hace {time_since_heartbeat:.1f}s)")
+                    self.bd_boss_connection.disconnect()
+                    self.bd_boss_connection = None
+                    logging.info("Conexión con jefe de BD cerrada")
+        
+        if self.router_boss_connection:
+            # Verificar si la conexión está cerrada
+            if not self.router_boss_connection.is_connected():
+                logging.warning(f"Jefe de Router desconectado (conexión cerrada)")
+                self.router_boss_connection.disconnect()
+                self.router_boss_connection = None
+                logging.info("Conexión con jefe de Router cerrada")
+            else:
+                # La conexión está activa, verificar heartbeat
+                time_since_heartbeat = self.router_boss_connection.get_time_since_last_heartbeat()
+                
+                if time_since_heartbeat is not None and time_since_heartbeat > self.heartbeat_timeout:
+                    logging.warning(f"Jefe de Router no responde (último heartbeat hace {time_since_heartbeat:.1f}s)")
+                    self.router_boss_connection.disconnect()
+                    self.router_boss_connection = None
+                    logging.info("Conexión con jefe de Router cerrada")
     
     def send_to_boss(self, message_dict):
         """Enviar mensaje a mi jefe"""
@@ -514,6 +744,8 @@ class ScrapperNode2():
                 self._handle_identification_incoming(sock, client_ip, message)
             elif msg_type == 'election':
                 self._handle_election_incoming(sock, client_ip, message)
+            elif msg_type == 'new_boss':
+                self._handle_new_boss_incoming(sock, client_ip, message)
             else:
                 logging.warning(f"Mensaje desconocido de {client_ip}: {msg_type}")
                 sock.close()
@@ -610,6 +842,11 @@ class ScrapperNode2():
         
         Regla: Solo respondo si mi IP es MAYOR que la del que pregunta.
         """
+        # Asegurar q no tengo jefe
+        if self.boss_connection: 
+            self.boss_connection.disconnect()
+            self.boss_connection = None
+            
         sender_ip = message.get('ip', client_ip)
         
         logging.info(f"Mensaje de elección recibido de {sender_ip}")
@@ -666,6 +903,98 @@ class ScrapperNode2():
         responder_ip = message_dict.get('ip', node_connection.ip)
         logging.info(f"Respuesta de elección recibida de {responder_ip}. No soy jefe.")
     
+    def _handle_new_boss_announcement(self, node_connection, message_dict):
+        """
+        Maneja anuncio de nuevo jefe vía conexión persistente.
+        Este es un caso especial donde recibimos el anuncio a través de una conexión existente.
+        """
+        new_boss_ip = message_dict.get('ip')
+        new_boss_port = message_dict.get('port', self.scrapper_port)
+        
+        logging.info(f"📢 Anuncio de nuevo jefe recibido vía conexión persistente: {new_boss_ip}")
+        
+        # Si ya soy jefe, esto es un conflicto - resolver por IP
+        # NOTE:Este pedazo no se debe ejecutar nunca pues solo se llama a eleccion si el jefe se desconecto
+        # Luego, este pedazo de codigo solo se ejecuta si no hay jefe conectado
+        if self.i_am_boss:
+            if new_boss_ip > self.my_ip:
+                logging.warning(f"Recibí anuncio de jefe con IP mayor ({new_boss_ip} > {self.my_ip}). Cediendo jefatura.")
+                self._handle_boss_change(new_boss_ip, new_boss_port)
+            else:
+                logging.warning(f"Recibí anuncio de jefe con IP menor ({new_boss_ip} < {self.my_ip}). Mantengo jefatura.")
+                # Podría iniciar nueva elección para resolver conflicto
+        else:
+            # No soy jefe, procesar normalmente
+            self._handle_boss_change(new_boss_ip, new_boss_port)
+    
+    def _handle_new_boss_incoming(self, sock, client_ip, message):
+        """
+        Maneja mensaje de nuevo jefe en conexión temporal entrante.
+        """
+        # Asegurarme de no tener jefe
+        if self.boss_connection:
+            self.boss_connection.disconnect()
+            self.boss_connection = None
+
+        new_boss_ip = message.get('ip', client_ip)
+        new_boss_port = message.get('port', self.scrapper_port)
+        
+        logging.info(f"📢 Anuncio de nuevo jefe recibido: {new_boss_ip}:{new_boss_port}")
+        
+        # Cerrar socket temporal
+        sock.close()
+        
+        # Procesar cambio de jefe
+        if self.i_am_boss:
+            if new_boss_ip > self.my_ip:
+                logging.warning(f"Nuevo jefe con IP mayor ({new_boss_ip} > {self.my_ip}). Cediendo jefatura.")
+                self._handle_boss_change(new_boss_ip, new_boss_port)
+            else:
+                logging.warning(f"Nuevo jefe con IP menor ({new_boss_ip} < {self.my_ip}). Ignoring.")
+        else:
+            self._handle_boss_change(new_boss_ip, new_boss_port)
+    
+    def _handle_boss_change(self, new_boss_ip, new_boss_port):
+        """
+        Maneja el cambio de jefe: desconecta del jefe anterior y conecta al nuevo.
+        
+        Args:
+            new_boss_ip (str): IP del nuevo jefe
+            new_boss_port (int): Puerto del nuevo jefe
+        """
+        # Si soy jefe, dejar de serlo
+        # if self.i_am_boss:
+        #     logging.info("Dejando de ser jefe...")
+        #     self.i_am_boss = False
+            
+        #     # Desconectar todos los subordinados
+        #     for node_id, conn in list(self.subordinates.items()):
+        #         logging.info(f"Desconectando subordinado: {node_id}")
+        #         conn.disconnect()
+        #         del self.subordinates[node_id]
+        
+        # Desconectar del jefe anterior si existe
+        if self.boss_connection:
+            old_boss_ip = self.boss_connection.ip
+            logging.info(f"Desconectando del jefe anterior: {old_boss_ip}")
+            self.boss_connection.disconnect()
+            self.boss_connection = None
+        
+        # Conectar al nuevo jefe
+        if new_boss_ip != self.my_ip:
+            logging.info(f"Conectando al nuevo jefe: {new_boss_ip}:{new_boss_port}")
+            
+            # Pequeña pausa para evitar condiciones de carrera
+            time.sleep(1)
+            
+            if self.connect_to_boss(new_boss_ip):
+                logging.info(f"✓ Conectado exitosamente al nuevo jefe {new_boss_ip}")
+            else:
+                logging.error(f"✗ Error conectando al nuevo jefe {new_boss_ip}")
+                # Si falla, podríamos iniciar elecciones
+                logging.info("Iniciando elecciones por fallo de conexión...")
+                threading.Thread(target=self.call_elections, daemon=True).start()
+    
     def call_elections(self):
         """
         Inicia proceso de elección usando algoritmo Bully.
@@ -707,56 +1036,20 @@ class ScrapperNode2():
         someone_responded = False
         
         for ip, port in higher_ip_nodes:
-            try:
-                # Conectar temporalmente
-                temp_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                temp_sock.settimeout(3.0)  # Timeout corto
-                temp_sock.connect((ip, port))
-                
-                # Enviar mensaje de elección
-                election_msg = {
-                    'type': 'election',
-                    'ip': self.my_ip,
-                    'port': self.scrapper_port
-                }
-                election_bytes = json.dumps(election_msg).encode()
-                temp_sock.send(len(election_bytes).to_bytes(2, 'big'))
-                temp_sock.send(election_bytes)
-                
-                logging.info(f"Mensaje de elección enviado a {ip}")
-                
-                # Esperar respuesta
-                try:
-                    length_bytes = temp_sock.recv(2)
-                    if length_bytes:
-                        msg_length = int.from_bytes(length_bytes, 'big')
-                        
-                        msg_bytes = b''
-                        while len(msg_bytes) < msg_length:
-                            chunk = temp_sock.recv(msg_length - len(msg_bytes))
-                            if not chunk:
-                                break
-                            msg_bytes += chunk
-                        
-                        if msg_bytes:
-                            response = json.loads(msg_bytes.decode())
-                            
-                            if response.get('type') == 'election_response':
-                                # ¡Hay alguien con IP mayor vivo!
-                                logging.info(f"✓ Respuesta recibida de {ip}. Él será el jefe.")
-                                someone_responded = True
-                                temp_sock.close()
-                                break  # Salir, ya no soy jefe
-                
-                except socket.timeout:
-                    logging.debug(f"No hubo respuesta de {ip}")
-                
-                temp_sock.close()
-                
-            except socket.timeout:
-                logging.debug(f"Timeout conectando a {ip}")
-            except Exception as e:
-                logging.debug(f"Error contactando {ip}: {e}")
+            election_msg = {
+                'type': 'election',
+                'ip': self.my_ip,
+                'port': self.scrapper_port
+            }
+            
+            logging.info(f"Mensaje de elección enviado a {ip}")
+            response = self.send_temporary_message(ip, port, election_msg, expect_response=True, timeout=3.0)
+            
+            if response and response.get('type') == 'election_response':
+                # ¡Hay alguien con IP mayor vivo!
+                logging.info(f"✓ Respuesta recibida de {ip}. Él será el jefe.")
+                someone_responded = True
+                break  # Salir, ya no soy jefe
         
         # Decidir resultado
         if someone_responded:
@@ -777,35 +1070,70 @@ class ScrapperNode2():
             self.boss_connection.disconnect()
             self.boss_connection = None
         
-        # Hacer broadcast de mi nuevo estatus
-        known_scrappers = self.known_nodes.get("scrapper", {})
+        # Limpiar subordinados antiguos (por si acaso)
+        old_subordinates = list(self.subordinates.keys())
+        for node_id in old_subordinates:
+            conn = self.subordinates[node_id]
+            conn.disconnect()
+            del self.subordinates[node_id]
         
-        for ip, info in known_scrappers.items():
-            if ip == self.my_ip:
-                continue
+        logging.info("=== ENVIANDO ANUNCIO DE NUEVO JEFE ===")
+        
+        # Obtener todos los nodos conocidos (discovered + known)
+        all_known_ips = set()
+        
+        # Agregar nodos descubiertos
+        for ip in self.discovered_nodes.get("scrapper", {}).keys():
+            if ip != self.my_ip:
+                all_known_ips.add(ip)
+        
+        # Agregar nodos conocidos
+        for ip in self.known_nodes.get("scrapper", {}).keys():
+            if ip != self.my_ip:
+                all_known_ips.add(ip)
+        
+        logging.info(f"Notificando a {len(all_known_ips)} nodos: {list(all_known_ips)}")
+        
+        # 1. Enviar mensaje "new_boss" a todos los nodos conocidos
+        for ip in all_known_ips:
+            port = self.known_nodes.get("scrapper", {}).get(ip, {}).get("port", self.scrapper_port)
+            if not port:
+                port = self.discovered_nodes.get("scrapper", {}).get(ip, {}).get("port", self.scrapper_port)
             
-            try:
-                # Enviar identificación como nuevo jefe
-                temp_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                temp_sock.settimeout(3.0)
-                temp_sock.connect((ip, info["port"]))
-                
-                announcement_msg = {
-                    'type': 'identification',
-                    'node_type': self.node_type,
-                    'ip': self.my_ip,
-                    'port': self.scrapper_port,
-                    'is_boss': True
-                }
-                msg_bytes = json.dumps(announcement_msg).encode()
-                temp_sock.send(len(msg_bytes).to_bytes(2, 'big'))
-                temp_sock.send(msg_bytes)
-                
-                temp_sock.close()
-                logging.info(f"Anuncio de jefe enviado a {ip}")
-                
-            except Exception as e:
-                logging.debug(f"Error anunciando a {ip}: {e}")
+            new_boss_msg = {
+                'type': 'new_boss',
+                'node_type': self.node_type,
+                'ip': self.my_ip,
+                'port': self.scrapper_port
+            }
+            
+            if self.send_temporary_message(ip, port, new_boss_msg, expect_response=False):
+                logging.info(f"✓ Anuncio 'new_boss' enviado a {ip}")
+            else:
+                logging.warning(f"✗ No se pudo enviar anuncio a {ip}")
+        
+        # 2. Esperar un momento para que los nodos procesen el mensaje
+        logging.info("Esperando a que los nodos procesen el anuncio...")
+        time.sleep(2)
+        
+        # 3. Establecer conexiones persistentes con todos los subordinados
+        logging.info("=== ESTABLECIENDO CONEXIONES CON SUBORDINADOS ===")
+        
+        connected_count = 0
+        for ip in all_known_ips:
+            port = self.known_nodes.get("scrapper", {}).get(ip, {}).get("port", self.scrapper_port)
+            if not port:
+                port = self.discovered_nodes.get("scrapper", {}).get(ip, {}).get("port", self.scrapper_port)
+            
+            # Intentar agregar como subordinado
+            if self.add_subordinate(ip):
+                connected_count += 1
+                logging.info(f"✓ Subordinado {ip} conectado exitosamente")
+            else:
+                logging.warning(f"✗ No se pudo conectar con {ip}")
+        
+        logging.info(f"=== JEFATURA ESTABLECIDA: {connected_count}/{len(all_known_ips)} subordinados conectados ===")
+   
     
     def broadcast_identification(self, node_type="scrapper"):
         """
@@ -826,91 +1154,47 @@ class ScrapperNode2():
         if not discovered:
             logging.warning(f"No hay nodos {node_type} descubiertos para contactar")
             return False
-        
-        my_id_msg = {
-            'type': 'identification',
-            'node_type': self.node_type,
-            'ip': self.my_ip,
-            'port': self.scrapper_port,
-            'is_boss': self.i_am_boss
-        }
-        
-        id_bytes = json.dumps(my_id_msg).encode()
+    
         boss_found = False
         
         for ip, info in discovered.items():
             if ip == self.my_ip:
                 continue
             
-            try:
-                # Conectar temporalmente
-                temp_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                temp_sock.settimeout(5.0)
-                temp_sock.connect((ip, info["port"]))
+            # Enviar identificación TEMPORAL (para descubrimiento solamente)
+            identification = {
+                'type': 'identification',
+                'node_type': node_type,
+                'node_port': self.scrapper_port,
+                'is_boss': self.i_am_boss,
+                'is_temporary': True  # Marcar como temporal
+            }
+            
+            logging.info(f"Identificación enviada a {ip}")
+            response = self.send_temporary_message(ip, info["port"], identification, expect_response=True, timeout=5.0)
+            
+            if response and response.get('type') == 'identification' and response.get('is_boss', False):
+                # ¡Es el jefe!
+                logging.info(f"¡Jefe encontrado en {ip}!")
+                boss_found = True
                 
-                # Enviar identificación TEMPORAL (para descubrimiento solamente)
-                identification = {
-                    'type': 'identification',
-                    'node_type': node_type,
-                    'node_port': self.scrapper_port,
-                    'is_boss': self.i_am_boss,
-                    'is_temporary': True  # Marcar como temporal
-                }
-                id_bytes = json.dumps(identification).encode()
-                temp_sock.send(len(id_bytes).to_bytes(2, 'big'))
-                temp_sock.send(id_bytes)
+                # Crear NUEVA conexión persistente (evita conflicto de sockets)
+                logging.info(f"Estableciendo conexión persistente con jefe...")
+                time.sleep(0.3)  # Pequeña pausa para que el jefe registre
                 
-                logging.info(f"Identificación enviada a {ip}")
+                self.connect_to_boss(ip)
                 
-                # Esperar respuesta
-                length_bytes = temp_sock.recv(2)
-                if length_bytes:
-                    # Hay respuesta, probablemente es el jefe
-                    msg_length = int.from_bytes(length_bytes, 'big')
-                    
-                    msg_bytes = b''
-                    while len(msg_bytes) < msg_length:
-                        chunk = temp_sock.recv(msg_length - len(msg_bytes))
-                        if not chunk:
-                            break
-                        msg_bytes += chunk
-                    
-                    if msg_bytes:
-                        response = json.loads(msg_bytes.decode())
-                        
-                        if response.get('type') == 'identification' and response.get('is_boss', False):
-                            # ¡Es el jefe! Cerrar socket temporal
-                            logging.info(f"¡Jefe encontrado en {ip}!")
-                            boss_found = True
-                            temp_sock.close()
-                            
-                            # Crear NUEVA conexión persistente (evita conflicto de sockets)
-                            logging.info(f"Estableciendo conexión persistente con jefe...")
-                            time.sleep(0.3)  # Pequeña pausa para que el jefe registre
-                            
-                            self.connect_to_boss(ip)
-                            
-                            # Iniciar heartbeats
-                            if self.boss_connection and self.boss_connection.is_connected():
-                                threading.Thread(
-                                    target=self._heartbeat_loop,
-                                    args=(self.boss_connection,),
-                                    daemon=True
-                                ).start()
-                                logging.info("Conexión persistente establecida exitosamente")
-                            else:
-                                logging.error(f"No se pudo establecer conexión persistente con {ip}")
-                                boss_found = False
-                            
-                            continue
-                
-                # Si llegamos aquí, no es el jefe o no respondió
-                temp_sock.close()
-                
-            except socket.timeout:
-                logging.debug(f"Timeout conectando a {ip} (probablemente no es jefe)")
-            except Exception as e:
-                logging.debug(f"Error contactando {ip}: {e}")
+                # Iniciar heartbeats
+                if self.boss_connection and self.boss_connection.is_connected():
+                    threading.Thread(
+                        target=self._heartbeat_loop,
+                        args=(self.boss_connection,),
+                        daemon=True
+                    ).start()
+                    logging.info("Conexión persistente establecida exitosamente")
+                else:
+                    logging.error(f"No se pudo establecer conexión persistente con {ip}")
+                    boss_found = False
         
         if boss_found:
             logging.info("Conexión con jefe establecida exitosamente")
@@ -946,7 +1230,16 @@ class ScrapperNode2():
         logging.info("Iniciando socket de escucha...")
         self.start_listening()
         
-        # 3. Broadcast de identificación (todos me registran, solo jefe responde)
+        # 3. Iniciar monitor de heartbeats
+        logging.info("Iniciando monitor de heartbeats...")
+        self.heartbeat_monitor_thread = threading.Thread(
+            target=self._heartbeat_monitor_loop,
+            name="HeartbeatMonitor",
+            daemon=True
+        )
+        self.heartbeat_monitor_thread.start()
+        
+        # 4. Broadcast de identificación (todos me registran, solo jefe responde)
         if discovered_ips:
             logging.info("Enviando identificación a todos los scrappers...")
             boss_found = self.broadcast_identification("scrapper")
@@ -955,7 +1248,7 @@ class ScrapperNode2():
                 logging.warning("No se encontró jefe activo. Iniciando elecciones...")
                 self.call_elections()
         
-        # 4. Comportamiento según rol
+        # 5. Comportamiento según rol
         if self.i_am_boss:
             logging.info("🔶 Soy el JEFE de scrappers")
             # TODO: Conectar con jefes de BD y Router si es necesario
