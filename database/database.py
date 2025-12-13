@@ -9,6 +9,7 @@ from datetime import datetime
 import struct
 import queue
 
+#========================Utils======================
 class MessageProtocol:
     # tipos de mensaje
     MESSAGE_TYPES = {
@@ -46,6 +47,20 @@ class MessageProtocol:
         except json.JSONDecodeError:
             return None
 
+def comparar_ips(ip1:str, ip2:str):
+    '''metodo que devuelve el mayor de los ips'''
+    partes1 = ip1.split('.')
+    partes2 = ip2.split('.')
+
+    for p1,p2 in zip(partes1, partes2):
+        num1 = int(p1)
+        num2 = int(p2)
+
+        if num1 != num2:
+            return num1 if num1 > num2 else num2
+    
+    return ip1
+
 NODE_TYPE = 'db'
 PORT = 8080
 
@@ -64,6 +79,7 @@ class DatabaseNode:
         self.escuchando = False
         self.conexiones_activas = {}
         self.control_de_latidos:dict[str, datetime] = {}  # una ip con una fecha
+        self.lider = None  # ip del nodo lider actual
         # cola de mensajes a enviar, a diferencia del centralizado, aqui guardaremos la tupla, mensaje-socket, para enviar el mensaje al receptor correcto
         self.message_queue = queue.Queue()
         self.stop_event = threading.Event()
@@ -117,7 +133,7 @@ class DatabaseNode:
                     logging.error(f"Error procesando mensaje de {addr[0]}: {e}\nmessage: {message}")
                     
 
-                logging.info(f"Recibido de {addr}: {message}")
+                #logging.info(f"Recibido de {addr}: {message}")
         
         finally:
             logging.info(f"Conexion cerrada con {addr}")
@@ -134,12 +150,12 @@ class DatabaseNode:
         data = message.get('data')
 
         handlers = {
-            #MessageProtocol.MESSAGE_TYPES['LEADER_QUERY']: self.handle_leader_query,
-            #MessageProtocol.MESSAGE_TYPES['LEADER_RESPONSE']: self.handle_leader_response,
+            MessageProtocol.MESSAGE_TYPES['HEARTBEAT']: self.receive_heartbeat,
+            MessageProtocol.MESSAGE_TYPES['LEADER_QUERY']: self.enviar_lider_actual,
+            MessageProtocol.MESSAGE_TYPES['LEADER_RESPONSE']: self.recibir_respuesta_de_lider_query,
             #MessageProtocol.MESSAGE_TYPES['ELECTION']: self.handle_election,
             #MessageProtocol.MESSAGE_TYPES['ANSWER']: self.handle_answer,
             #MessageProtocol.MESSAGE_TYPES['COORDINATOR']: self.handle_coordinator,
-            MessageProtocol.MESSAGE_TYPES['HEARTBEAT']: self.receive_heartbeat,
             #MessageProtocol.MESSAGE_TYPES['HEARTBEAT_RESPONSE']: self.handle_heartbeat_response,
             #MessageProtocol.MESSAGE_TYPES['JOIN_NETWORK']: self.handle_join_network,
             #MessageProtocol.MESSAGE_TYPES['LEAVE_NETWORK']: self.handle_leave_network,
@@ -156,12 +172,6 @@ class DatabaseNode:
         else:
             logging.error(f"Tipo de mensaje: {message.get('type')} desconocido")
 
-        if msg_type == 'heartbeat':
-            last_heartbeat = datetime.now().isoformat()
-            logging.info(f"Recibiendo ping de: {ip} {last_heartbeat}")
-
-        else:
-            logging.error(f"El mensaje de {ip} mensaje: {message} no tiene las caracteristicas esperadas")
 
     def recibir_mensaje(self, socket_):
         '''Encargado de recibir el mensaje con protocolo longitud-mensaje'''
@@ -328,7 +338,7 @@ class DatabaseNode:
                 for ip, conn in self.conexiones_activas.items():
                     logging.info(f"ip: {ip}")
                     if self._enqueue_message(heartbeat_msg, ip, conn):
-                        logging.info('mensaje de latido encolado')
+                        logging.info(f"mensaje de latido {ip} encolado")
 
                 time.sleep(10)
             
@@ -343,21 +353,93 @@ class DatabaseNode:
     def handle_heartbeat(self, node_ip, timeout=15):
         '''Hilo encargado de verificar que el nodo node_ip este dando latidos'''
         while(True):
-            logging.info(f"Entrando al ciclo de handle_heartbeat y durmiendo proceso por {timeout} segundos ...")
+            #logging.info(f"Entrando al ciclo de handle_heartbeat y durmiendo proceso por {timeout} segundos ...")
             time.sleep(timeout)
-            logging.info("Saliendo del suenio del proceso ...")
-            logging.info(f"{self.control_de_latidos}")
+            #logging.info("Saliendo del suenio del proceso ...")
+            #logging.info(f"{self.control_de_latidos}")
             dif = abs((datetime.now() - self.control_de_latidos[node_ip]).total_seconds())
-            logging.info(f"Diferencia de {dif} segundos")
+            #logging.info(f"Diferencia de {dif} segundos")
             if dif > 35:
                 logging.error(f"El nodo {node_ip} no responde, cerrando socket...")
                 del(self.conexiones_activas[node_ip])
                 break
             
-            logging.info(f"Diferencia de {dif}\nEl nodo esta activo, continuando ciclo ...")
+            #logging.info(f"Diferencia de {dif}\nEl nodo esta activo, continuando ciclo ...")
 
+    
 
-    #===================funcionalidades del nodo====================
+    #===================funcionalidades del nodo===================
+
+    #======================Eleccion de lider=======================
+
+    def verificar_conec_de_lider(self, timeout = 15):
+        '''hilo encargado de verificar la conectividad del lider actual'''
+        while(True):
+            if self.lider != None:
+                if self.lider not in self.conexiones_activas:
+                    self.lider = None
+                    continue
+            else:
+                self.preguntar_por_lider()    
+
+            time.sleep(15)
+
+    def preguntar_por_lider(self):
+        '''proceso encargado de elegir a un lider'''
+        if len(self.conexiones_activas) == 0:
+            self.lider = self.ip
+            logging.info("Asignandose a si mismo como lider")
+            logging.info(f"lider actual: {self.lider}")
+        
+        lider_query_message = MessageProtocol.create_message(
+            msg_type=MessageProtocol.MESSAGE_TYPES['LEADER_QUERY'],
+            sender_id=self.ip,
+            node_type=self.node_type,
+            timestamp=datetime.now().isoformat()
+        )
+
+        for ip, conn in self.conexiones_activas.items():
+            if self._enqueue_message(lider_query_message, ip, conn):
+                logging.info(f"mensaje de lider_query a {ip} encolado")
+
+    def recibir_respuesta_de_lider_query(self, message, sender_id, node_type, timestamp, data):
+        '''proceso encargado de asignar el lider, o actualizar el lider'''
+        leader = data.get('leader')
+        if self.lider == None:
+            self.lider = leader
+        
+        elif self.lider != leader:
+            self.lider = comparar_ips(self.lider, leader)
+            #enviar lider a todos los analogos ya que hay discordancia en quien es el lider
+            self.enviar_lider_actual()
+        
+    def enviar_lider_actual(self, message=None, sender_id=None, node_type=None, timestamp=None, data=None):
+        '''proceso encargado a enviar el lider actual, ya sea para responder al mensaje leader_query o desde otro metodo'''
+        leader_message = MessageProtocol.create_message(
+            msg_type=MessageProtocol.MESSAGE_TYPES['LEADER_RESPONSE'],
+            sender_id=self.ip,
+            node_type=self.node_type,
+            timestamp=datetime.now().isoformat(),
+            data={'leader':self.lider}
+        )
+
+        if sender_id != None:
+            try:
+                conn:socket.socket = self.conexiones_activas[sender_id]
+                self._enqueue_message(leader_message, sender_id, conn)
+                logging.info(f"Mensaje de lider a {sender_id} encolado")
+            
+            except Exception as e:
+                logging.error(f"Error al encolar mensaje de lider: {e}")
+
+        else:
+            for ip, conn in self.conexiones_activas.items():
+                self._enqueue_message(leader_message, ip, conn)
+                logging.info(f"mensaje de lider a {ip} encolado")
+
+            
+
+    #======================eleccion de lider=======================
 
     #=======================Bucle principal========================
 
@@ -370,6 +452,7 @@ class DatabaseNode:
 
         while(True):
             logging.info('entrando al ciclo principal')
+            logging.info(f"lider actual {self.lider}")
             time.sleep(20)
 
     #======================bucle principal=========================
