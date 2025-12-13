@@ -50,15 +50,7 @@ class ScrapperNode2():
         # Control de ejecución
         self.running = False
         
-        # Cache de nodos descubiertos (sin conexión aún)
-        # Almacena IPs descubiertas vía DNS para decidir después si conectar
-        self.discovered_nodes = {
-            "scrapper": {},  # {ip: {"port": port, "discovered_at": datetime}}
-            "bd": {},
-            "router": {}
-        }
-        
-        # Cache de IPs conocidas (nodos que se han identificado)
+        # Cache de IPs conocidas (nodos descubiertos o identificados)
         # Útil para elecciones futuras aunque no estén conectados
         self.known_nodes = {
             "scrapper": {},  # {ip: {"port": port, "last_seen": datetime, "is_boss": bool}}
@@ -151,6 +143,8 @@ class ScrapperNode2():
         else:
             logging.error(f"No se pudo conectar al jefe en {boss_ip}")
             self.boss_connection = None
+            # Eliminar de known_nodes si no se pudo conectar
+            self.remove_node_from_registry("scrapper", boss_ip)
             return False
     
     def add_subordinate(self, node_ip, existing_socket=None):
@@ -197,6 +191,8 @@ class ScrapperNode2():
             return True
         else:
             logging.error(f"No se pudo conectar con subordinado {node_ip}")
+            # Eliminar de known_nodes si no se pudo conectar
+            self.remove_node_from_registry("scrapper", node_ip)
             return False
     
     def _heartbeat_loop(self, node_connection):
@@ -209,7 +205,7 @@ class ScrapperNode2():
             time.sleep(30)  # Heartbeat cada 30 segundos
     
     def send_temporary_message(self, target_ip, target_port, message_dict, 
-                               expect_response=False, timeout=3.0):
+                               expect_response=False, timeout=3.0, node_type=None):
         """
         Envía un mensaje temporal a un nodo sin mantener la conexión.
         Encapsula toda la lógica de: crear socket -> conectar -> enviar -> recibir (opcional) -> cerrar.
@@ -224,6 +220,9 @@ class ScrapperNode2():
             message_dict (dict): Mensaje a enviar (será convertido a JSON)
             expect_response (bool): Si True, espera y retorna la respuesta
             timeout (float): Timeout para la conexión y recepción (en segundos)
+            node_type (str, optional): Tipo de nodo ('scrapper', 'bd', 'router'). 
+                                       Si se proporciona, el nodo se eliminará de known_nodes
+                                       en caso de error de conexión.
         
         Returns:
             dict o bool:
@@ -235,6 +234,7 @@ class ScrapperNode2():
             - Los errores se logean como DEBUG para no saturar los logs
             - El protocolo usado es: 2 bytes (longitud) + mensaje JSON
             - Thread-safe: cada llamada usa su propio socket temporal
+            - Si falla la conexión y node_type está especificado, el nodo se elimina de known_nodes
         """
         temp_sock = None
         try:
@@ -286,14 +286,31 @@ class ScrapperNode2():
         
         except socket.timeout:
             logging.debug(f"Timeout conectando/comunicando con {target_ip}:{target_port}")
+            # Eliminar de known_nodes si se especificó node_type
+            if node_type:
+                self.remove_node_from_registry(node_type, target_ip)
             return None if expect_response else False
         
         except ConnectionRefusedError:
             logging.debug(f"Conexión rechazada por {target_ip}:{target_port}")
+            # Eliminar de known_nodes si se especificó node_type
+            if node_type:
+                self.remove_node_from_registry(node_type, target_ip)
+            return None if expect_response else False
+        
+        except OSError as e:
+            # Incluye errores como "Network is unreachable", "No route to host", etc.
+            logging.debug(f"Error de red con {target_ip}:{target_port}: {e}")
+            # Eliminar de known_nodes si se especificó node_type
+            if node_type:
+                self.remove_node_from_registry(node_type, target_ip)
             return None if expect_response else False
         
         except Exception as e:
             logging.debug(f"Error en comunicación temporal con {target_ip}:{target_port}: {e}")
+            # Eliminar de known_nodes si se especificó node_type (por cualquier error inesperado)
+            if node_type:
+                self.remove_node_from_registry(node_type, target_ip)
             return None if expect_response else False
         
         finally:
@@ -333,12 +350,16 @@ class ScrapperNode2():
         if not self.i_am_boss and self.boss_connection:
             # Verificar si la conexión está cerrada
             if not self.boss_connection.is_connected():
+                boss_ip = self.boss_connection.ip
                 logging.warning(f"Jefe {self.boss_connection.node_id} desconectado (conexión cerrada)")
                 logging.warning("Iniciando elecciones para encontrar nuevo jefe...")
                 
                 # Desconectar del jefe muerto
                 self.boss_connection.disconnect()
                 self.boss_connection = None
+                
+                # Eliminar de known_nodes
+                self.remove_node_from_registry("scrapper", boss_ip)
                 
                 # Iniciar proceso de elección
                 threading.Thread(target=self.call_elections, daemon=True).start()
@@ -347,12 +368,16 @@ class ScrapperNode2():
                 time_since_heartbeat = self.boss_connection.get_time_since_last_heartbeat()
                 
                 if time_since_heartbeat is not None and time_since_heartbeat > self.heartbeat_timeout:
+                    boss_ip = self.boss_connection.ip
                     logging.warning(f"Jefe {self.boss_connection.node_id} no responde (último heartbeat hace {time_since_heartbeat:.1f}s)")
                     logging.warning("Iniciando elecciones para encontrar nuevo jefe...")
                     
                     # Desconectar del jefe muerto
                     self.boss_connection.disconnect()
                     self.boss_connection = None
+                    
+                    # Eliminar de known_nodes
+                    self.remove_node_from_registry("scrapper", boss_ip)
                     
                     # Iniciar proceso de elección
                     threading.Thread(target=self.call_elections, daemon=True).start()
@@ -398,35 +423,47 @@ class ScrapperNode2():
         if self.bd_boss_connection:
             # Verificar si la conexión está cerrada
             if not self.bd_boss_connection.is_connected():
+                bd_ip = self.bd_boss_connection.ip
                 logging.warning(f"Jefe de BD desconectado (conexión cerrada)")
                 self.bd_boss_connection.disconnect()
                 self.bd_boss_connection = None
+                # Eliminar de known_nodes
+                self.remove_node_from_registry("bd", bd_ip)
                 logging.info("Conexión con jefe de BD cerrada")
             else:
                 # La conexión está activa, verificar heartbeat
                 time_since_heartbeat = self.bd_boss_connection.get_time_since_last_heartbeat()
                 
                 if time_since_heartbeat is not None and time_since_heartbeat > self.heartbeat_timeout:
+                    bd_ip = self.bd_boss_connection.ip
                     logging.warning(f"Jefe de BD no responde (último heartbeat hace {time_since_heartbeat:.1f}s)")
                     self.bd_boss_connection.disconnect()
                     self.bd_boss_connection = None
+                    # Eliminar de known_nodes
+                    self.remove_node_from_registry("bd", bd_ip)
                     logging.info("Conexión con jefe de BD cerrada")
         
         if self.router_boss_connection:
             # Verificar si la conexión está cerrada
             if not self.router_boss_connection.is_connected():
+                router_ip = self.router_boss_connection.ip
                 logging.warning(f"Jefe de Router desconectado (conexión cerrada)")
                 self.router_boss_connection.disconnect()
                 self.router_boss_connection = None
+                # Eliminar de known_nodes
+                self.remove_node_from_registry("router", router_ip)
                 logging.info("Conexión con jefe de Router cerrada")
             else:
                 # La conexión está activa, verificar heartbeat
                 time_since_heartbeat = self.router_boss_connection.get_time_since_last_heartbeat()
                 
                 if time_since_heartbeat is not None and time_since_heartbeat > self.heartbeat_timeout:
+                    router_ip = self.router_boss_connection.ip
                     logging.warning(f"Jefe de Router no responde (último heartbeat hace {time_since_heartbeat:.1f}s)")
                     self.router_boss_connection.disconnect()
                     self.router_boss_connection = None
+                    # Eliminar de known_nodes
+                    self.remove_node_from_registry("router", router_ip)
                     logging.info("Conexión con jefe de Router cerrada")
     
     def send_to_boss(self, message_dict):
@@ -566,15 +603,21 @@ class ScrapperNode2():
                 if ip not in discovered_ips and ip != self.my_ip:
                     discovered_ips.append(ip)
         
-            # Almacenar nodos descubiertos en cache para usar después
+            # Almacenar nodos descubiertos en known_nodes para uso posterior
             for ip in discovered_ips:
-                if node_alias not in self.discovered_nodes:
-                    self.discovered_nodes[node_alias] = {}
+                if node_alias not in self.known_nodes:
+                    self.known_nodes[node_alias] = {}
                 
-                self.discovered_nodes[node_alias][ip] = {
-                    "port": node_port,
-                    "discovered_at": datetime.now()
-                }
+                # Solo actualizar si no existe o actualizar last_seen
+                if ip not in self.known_nodes[node_alias]:
+                    self.known_nodes[node_alias][ip] = {
+                        "port": node_port,
+                        "last_seen": datetime.now(),
+                        "is_boss": False  # Por defecto, no sabemos si es jefe
+                    }
+                else:
+                    # Actualizar last_seen si ya existe
+                    self.known_nodes[node_alias][ip]["last_seen"] = datetime.now()
             
             discovered_count = len([ip for ip in discovered_ips if ip != self.my_ip])
             logging.info(f"Nodos {node_alias} descubiertos: {discovered_count}")
@@ -592,31 +635,53 @@ class ScrapperNode2():
     
     def get_discovered_nodes(self, node_type=None):
         """
-        Retorna nodos descubiertos (no necesariamente conectados).
+        Retorna nodos conocidos (descubiertos o identificados).
         
         Args:
             node_type (str, optional): Tipo de nodo ('scrapper', 'bd', 'router').
                                        Si es None, retorna todos.
         
         Returns:
-            dict o list: Diccionario de nodos descubiertos o lista de IPs
+            dict o list: Diccionario de nodos conocidos o lista de IPs
         """
         if node_type:
-            return self.discovered_nodes.get(node_type, {})
-        return self.discovered_nodes
+            return self.known_nodes.get(node_type, {})
+        return self.known_nodes
+    
+    def remove_node_from_registry(self, node_type, ip):
+        """
+        Elimina un nodo del registro de nodos conocidos.
+        Útil cuando un nodo se desconecta y no queremos mantenerlo en el registro.
+        
+        Args:
+            node_type (str): Tipo de nodo ('scrapper', 'bd', 'router')
+            ip (str): IP del nodo a eliminar
+        
+        Returns:
+            bool: True si se eliminó, False si no existía
+        """
+        if node_type not in self.known_nodes:
+            return False
+        
+        if ip in self.known_nodes[node_type]:
+            del self.known_nodes[node_type][ip]
+            logging.info(f"Nodo {node_type} {ip} eliminado del registro")
+            return True
+        
+        return False
     
     def connect_to_discovered_nodes(self, node_type):
         """
-        Conecta a todos los nodos descubiertos de un tipo específico.
+        Conecta a todos los nodos conocidos de un tipo específico.
         Útil cuando soy jefe y necesito conectar con subordinados.
         
         Args:
             node_type (str): Tipo de nodo ('scrapper', 'bd', 'router')
         """
-        discovered = self.discovered_nodes.get(node_type, {})
+        discovered = self.known_nodes.get(node_type, {})
         
         if not discovered:
-            logging.warning(f"No hay nodos {node_type} descubiertos")
+            logging.warning(f"No hay nodos {node_type} conocidos")
             return 0
         
         connected_count = 0
@@ -1043,7 +1108,10 @@ class ScrapperNode2():
             }
             
             logging.info(f"Mensaje de elección enviado a {ip}")
-            response = self.send_temporary_message(ip, port, election_msg, expect_response=True, timeout=3.0)
+            response = self.send_temporary_message(ip, port, election_msg, 
+                                                   expect_response=True, 
+                                                   timeout=3.0, 
+                                                   node_type="scrapper")
             
             if response and response.get('type') == 'election_response':
                 # ¡Hay alguien con IP mayor vivo!
@@ -1076,18 +1144,16 @@ class ScrapperNode2():
             conn = self.subordinates[node_id]
             conn.disconnect()
             del self.subordinates[node_id]
+            
+        # #Esperar un tiempo para q todos los nodos procesen la desconexión del jefe anterior
+        # time.sleep(2)
         
         logging.info("=== ENVIANDO ANUNCIO DE NUEVO JEFE ===")
         
-        # Obtener todos los nodos conocidos (discovered + known)
+        # Obtener todos los nodos conocidos
         all_known_ips = set()
         
-        # Agregar nodos descubiertos
-        for ip in self.discovered_nodes.get("scrapper", {}).keys():
-            if ip != self.my_ip:
-                all_known_ips.add(ip)
-        
-        # Agregar nodos conocidos
+        # Agregar nodos conocidos (ya incluye descubiertos e identificados)
         for ip in self.known_nodes.get("scrapper", {}).keys():
             if ip != self.my_ip:
                 all_known_ips.add(ip)
@@ -1097,8 +1163,6 @@ class ScrapperNode2():
         # 1. Enviar mensaje "new_boss" a todos los nodos conocidos
         for ip in all_known_ips:
             port = self.known_nodes.get("scrapper", {}).get(ip, {}).get("port", self.scrapper_port)
-            if not port:
-                port = self.discovered_nodes.get("scrapper", {}).get(ip, {}).get("port", self.scrapper_port)
             
             new_boss_msg = {
                 'type': 'new_boss',
@@ -1107,10 +1171,12 @@ class ScrapperNode2():
                 'port': self.scrapper_port
             }
             
-            if self.send_temporary_message(ip, port, new_boss_msg, expect_response=False):
+            if self.send_temporary_message(ip, port, new_boss_msg, 
+                                           expect_response=False, 
+                                           node_type="scrapper"):
                 logging.info(f"✓ Anuncio 'new_boss' enviado a {ip}")
             else:
-                logging.warning(f"✗ No se pudo enviar anuncio a {ip}")
+                logging.warning(f"✗ No se pudo enviar anuncio a {ip} (nodo eliminado de registro)")
         
         # 2. Esperar un momento para que los nodos procesen el mensaje
         logging.info("Esperando a que los nodos procesen el anuncio...")
@@ -1122,8 +1188,6 @@ class ScrapperNode2():
         connected_count = 0
         for ip in all_known_ips:
             port = self.known_nodes.get("scrapper", {}).get(ip, {}).get("port", self.scrapper_port)
-            if not port:
-                port = self.discovered_nodes.get("scrapper", {}).get(ip, {}).get("port", self.scrapper_port)
             
             # Intentar agregar como subordinado
             if self.add_subordinate(ip):
@@ -1137,7 +1201,7 @@ class ScrapperNode2():
     
     def broadcast_identification(self, node_type="scrapper"):
         """
-        Envía identificación a todos los nodos descubiertos de un tipo.
+        Envía identificación a todos los nodos conocidos de un tipo.
         Solo mantiene conexión con quien responda (el jefe).
         
         Flujo:
@@ -1149,10 +1213,10 @@ class ScrapperNode2():
         Args:
             node_type (str): Tipo de nodo a contactar ('scrapper', 'bd', 'router')
         """
-        discovered = self.discovered_nodes.get(node_type, {})
+        discovered = self.known_nodes.get(node_type, {})
         
         if not discovered:
-            logging.warning(f"No hay nodos {node_type} descubiertos para contactar")
+            logging.warning(f"No hay nodos {node_type} conocidos para contactar")
             return False
     
         boss_found = False
@@ -1171,7 +1235,10 @@ class ScrapperNode2():
             }
             
             logging.info(f"Identificación enviada a {ip}")
-            response = self.send_temporary_message(ip, info["port"], identification, expect_response=True, timeout=5.0)
+            response = self.send_temporary_message(ip, info["port"], identification, 
+                                                   expect_response=True, 
+                                                   timeout=5.0, 
+                                                   node_type=node_type)
             
             if response and response.get('type') == 'identification' and response.get('is_boss', False):
                 # ¡Es el jefe!
