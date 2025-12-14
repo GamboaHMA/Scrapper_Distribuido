@@ -25,7 +25,15 @@ class MessageProtocol:
         'TASK_ACCEPTED': 'task_accepted',
         'TASK_REJECTION': 'task_rejection',
         'ELECTION_RESPONSE': 'election_response',
-        'NEW_BOSS': 'new_boss'
+        'NEW_BOSS': 'new_boss',
+        
+        # TASK MANAGEMENT (Router <-> Scrapper)
+        'NEW_TASK': 'new_task',
+        'TASK_COMPLETED': 'task_completed',
+        
+        # DATABASE COMMUNICATION
+        'SAVE_DATA': 'save_data',
+        'SAVE_CONFIRMATION': 'save_confirmation'
     }
 
     @staticmethod
