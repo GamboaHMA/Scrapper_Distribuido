@@ -47,20 +47,34 @@ class MessageProtocol:
         except json.JSONDecodeError:
             return None
 
-def comparar_ips(ip1:str, ip2:str):
-    '''metodo que devuelve el mayor de los ips'''
-    partes1 = ip1.split('.')
-    partes2 = ip2.split('.')
-
-    for p1,p2 in zip(partes1, partes2):
-        num1 = int(p1)
-        num2 = int(p2)
-
-        if num1 != num2:
-            return num1 if num1 > num2 else num2
+def comparar_lista_ips(ips:list):
+    '''Método que devuelve la mayor de las IPs en una lista'''
+    if not ips:
+        return None
     
-    return ip1
-
+    # Inicializamos con la primera IP como la mayor
+    mayor_ip = ips[0]
+    partes_mayor = mayor_ip.split('.')
+    
+    # Comparamos con cada una de las otras IPs
+    for ip in ips[1:]:
+        partes_actual = ip.split('.')
+        
+        for p_mayor, p_actual in zip(partes_mayor, partes_actual):
+            num_mayor = int(p_mayor)
+            num_actual = int(p_actual)
+            
+            if num_actual > num_mayor:
+                # La IP actual es mayor
+                mayor_ip = ip
+                partes_mayor = partes_actual
+                break
+            elif num_actual < num_mayor:
+                # La IP actual es menor
+                break
+            # Si son iguales, continuamos con la siguiente parte
+    
+    return mayor_ip
 NODE_TYPE = 'db'
 PORT = 8080
 
@@ -77,8 +91,9 @@ class DatabaseNode:
         self.port = port
         self.sock_escucha = None
         self.escuchando = False
-        self.conexiones_activas = {}
+        self.conexiones_activas = {}  # diccionario de key: (ip,port), value: conn
         self.control_de_latidos:dict[str, datetime] = {}  # una ip con una fecha
+        self.control_de_latidos[self.ip] = datetime.now()  # tiempo en que el nodo se queda sin lider, inicialmente entra sin lider
         self.lider = None  # ip del nodo lider actual
         # cola de mensajes a enviar, a diferencia del centralizado, aqui guardaremos la tupla, mensaje-socket, para enviar el mensaje al receptor correcto
         self.message_queue = queue.Queue()
@@ -123,17 +138,20 @@ class DatabaseNode:
         '''Recibe los mensajes dado un socket con otro nodo'''
         try:
             while True:
-                message = self.recibir_mensaje(conn)
-                if not message:
-                    break
                 try:
-                    message_dict = json.loads(message)
-                    self.procesar_mensaje(message_dict, addr[0])
+                    message = self.recibir_mensaje(conn)
+                    if not message:
+                        break
+                    try:
+                        message_dict = json.loads(message)
+                        self.procesar_mensaje(message_dict, addr[0])
+                    except Exception as e:
+                        logging.error(f"Error procesando mensaje de {addr[0]}: {e}\nmessage: {message}")
                 except Exception as e:
-                    logging.error(f"Error procesando mensaje de {addr[0]}: {e}\nmessage: {message}")
-                    
-
+                    continue        
                 #logging.info(f"Recibido de {addr}: {message}")
+        except Exception as e:
+            logging.error(f"Error manejando conexion con {addr}: {e}")
         
         finally:
             logging.info(f"Conexion cerrada con {addr}")
@@ -162,6 +180,7 @@ class DatabaseNode:
             #MessageProtocol.MESSAGE_TYPES['NODE_LIST']: self.handle_node_list,
         }
 
+        logging.info(f"recibiendo mensaje de {sender_id} tipo {node_type} de tipo {msg_type}")
         handler = handlers.get(msg_type)
         
         if handler:
@@ -243,11 +262,11 @@ class DatabaseNode:
         try:
             sock_cliente = socket.create_connection((destino, self.port), timeout=5)
             logging.info(f"Conectado a {destino}:{self.port}")
-            logging.info(f"Conectado2 a {destino}:{self.port} ")
             self.conexiones_activas[destino] = sock_cliente
             self.control_de_latidos[destino] = datetime.now()
             # iniciar hilo de timeout para la posible desconexion
             logging.info("antes de entrar al hilo de handle_heartbeat")
+            threading.Thread(target=self.manejar_conexion, daemon=True, args=(sock_cliente, sock_cliente.getsockname())).start()
             threading.Thread(target=self.handle_heartbeat, daemon=True, args=(destino,)).start()
             return sock_cliente
         except socket.timeout:
@@ -320,12 +339,6 @@ class DatabaseNode:
         '''envia senial periodica a todos los similares a los que esta conectado''' # como el proyecto es a fallas de 2 nodos, tendra dos companieros
         while True:
             try:
-                heartbeat_msg = {
-                    'type': 'heartbeat',
-                    'node_ip': self.ip,
-                    'node_name': self.name,
-                    'time_now': datetime.now().isoformat()
-                }
 
                 heartbeat_msg = MessageProtocol.create_message(
                     msg_type=MessageProtocol.MESSAGE_TYPES['HEARTBEAT'],
@@ -335,10 +348,11 @@ class DatabaseNode:
                 )
 
                 logging.info(f"conexiones activas {self.conexiones_activas}")
-                for ip, conn in self.conexiones_activas.items():
+                connections_copy = self.conexiones_activas.copy()
+                for ip, conn in connections_copy.items():
                     logging.info(f"ip: {ip}")
                     if self._enqueue_message(heartbeat_msg, ip, conn):
-                        logging.info(f"mensaje de latido {ip} encolado")
+                        logging.info(f"mensaje de latido a {ip} encolado")
 
                 time.sleep(10)
             
@@ -376,45 +390,68 @@ class DatabaseNode:
         '''hilo encargado de verificar la conectividad del lider actual'''
         while(True):
             if self.lider != None:
-                if self.lider not in self.conexiones_activas:
+                if self.lider not in self.conexiones_activas and self.lider != self.ip:
                     self.lider = None
                     continue
             else:
                 self.preguntar_por_lider()    
 
-            time.sleep(15)
+                time.sleep(15)
 
     def preguntar_por_lider(self):
-        '''proceso encargado de elegir a un lider'''
-        if len(self.conexiones_activas) == 0:
-            self.lider = self.ip
-            logging.info("Asignandose a si mismo como lider")
-            logging.info(f"lider actual: {self.lider}")
-        
-        lider_query_message = MessageProtocol.create_message(
-            msg_type=MessageProtocol.MESSAGE_TYPES['LEADER_QUERY'],
-            sender_id=self.ip,
-            node_type=self.node_type,
-            timestamp=datetime.now().isoformat()
-        )
+        '''proceso encargado de elegir a un lider en caso de no tener'''
+        if self.lider == None:
+            if len(self.conexiones_activas) == 0:
+                self.lider = self.ip
+                logging.info("Asignandose a si mismo como lider")
+                logging.info(f"lider actual: {self.lider}")
+            
+            dif = abs((datetime.now() - self.control_de_latidos[self.ip]).total_seconds())
+            if dif > 15:
+                ips_actuales = list(self.conexiones_activas.keys())
+                ips_actuales.append(self.ip)
+                self.lider = comparar_lista_ips(ips_actuales)
+                #self.lider = self.ip
+                logging.info(f"asignando como lider al de mayor ip de todos los nodos {self.node_type}: {self.lider}")
+                logging.info("enviando lider actual al resto de los nodos ...")
+                self.enviar_lider_actual()
+            
+            else:
+                lider_query_message = MessageProtocol.create_message(
+                    msg_type=MessageProtocol.MESSAGE_TYPES['LEADER_QUERY'],
+                    sender_id=self.ip,
+                    node_type=self.node_type,
+                    timestamp=datetime.now().isoformat()
+                )
 
-        for ip, conn in self.conexiones_activas.items():
-            if self._enqueue_message(lider_query_message, ip, conn):
-                logging.info(f"mensaje de lider_query a {ip} encolado")
+                conexiones_act_copia = self.conexiones_activas.copy()
+                for ip, conn in conexiones_act_copia.items():
+                    if self._enqueue_message(lider_query_message, ip, conn):
+                        logging.info(f"mensaje de lider_query a {ip} encolado")
 
     def recibir_respuesta_de_lider_query(self, message, sender_id, node_type, timestamp, data):
         '''proceso encargado de asignar el lider, o actualizar el lider'''
-        leader = data.get('leader')
-        if self.lider == None:
-            self.lider = leader
-        
-        elif self.lider != leader:
-            self.lider = comparar_ips(self.lider, leader)
-            #enviar lider a todos los analogos ya que hay discordancia en quien es el lider
-            self.enviar_lider_actual()
-        
+        try:
+            leader = data.get('leader')
+            if self.lider == None:
+                self.lider = leader
+                logging.info(f"recibiendo respuesta de lider_response, asignando como lider a: {leader}")
+            
+            elif self.lider != leader:
+                logging.info(f"lider antes {self.lider}, lider recibido en response: {leader}")
+                self.lider = comparar_lista_ips([self.lider, leader])
+                logging.info(f"lider despues de comparar: {self.lider}")
+                #enviar lider a todos los analogos ya que hay discordancia en quien es el lider
+                logging.info("enviando lider actual al resto de los nodos")
+                self.enviar_lider_actual()
+        except Exception as e:
+            logging.error(f"error recibiendo respuesta de lider_query: {e}")
+
     def enviar_lider_actual(self, message=None, sender_id=None, node_type=None, timestamp=None, data=None):
         '''proceso encargado a enviar el lider actual, ya sea para responder al mensaje leader_query o desde otro metodo'''
+        if self.lider == None:
+            return
+        
         leader_message = MessageProtocol.create_message(
             msg_type=MessageProtocol.MESSAGE_TYPES['LEADER_RESPONSE'],
             sender_id=self.ip,
@@ -449,6 +486,8 @@ class DatabaseNode:
         threading.Thread(target=self.send_worker, daemon=True).start()
         threading.Thread(target=self.buscar_semejantes, daemon=True).start() 
         threading.Thread(target=self.send_heartbeat, daemon=True).start()
+        time.sleep(2)
+        threading.Thread(target=self.verificar_conec_de_lider, daemon=True).start()
 
         while(True):
             logging.info('entrando al ciclo principal')
