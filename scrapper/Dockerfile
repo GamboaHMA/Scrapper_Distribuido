@@ -7,7 +7,8 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copiar el código de la aplicación
-COPY client.py scrapper.py ./
+COPY scrapper_main.py scrapper.py ./
+COPY utils/ ./utils/
 
 # Definir variables de entorno
 ENV PYTHONUNBUFFERED=1
@@ -18,4 +19,4 @@ ENV BROADCAST_PORT=8081
 ENV AUTO_DISCOVERY=true
 
 # Comando para ejecutar la aplicación
-CMD ["python3", "client.py"]
+CMD ["python3", "scrapper_main.py"]
