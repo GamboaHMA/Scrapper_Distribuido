@@ -4,6 +4,7 @@ import threading
 import queue
 import logging
 from datetime import datetime
+from .message_protocol import MessageProtocol
 
 
 class NodeConnection:
@@ -264,20 +265,27 @@ class NodeConnection:
     
     def send_heartbeat(self, additional_data=None):
         """
-        Envía un mensaje de heartbeat al nodo.
+        Envía un mensaje de heartbeat usando MessageProtocol.
         
         Args:
             additional_data (dict, optional): Datos adicionales para incluir en el heartbeat
         """
-        heartbeat_msg = {
-            'type': 'heartbeat',
-            'timestamp': datetime.now().isoformat()
-        }
+        data = additional_data if additional_data else {}
         
-        if additional_data:
-            heartbeat_msg.update(additional_data)
+        # Crear mensaje usando MessageProtocol
+        message_json = MessageProtocol.create_message(
+            msg_type=MessageProtocol.MESSAGE_TYPES['HEARTBEAT'],
+            sender_id=self.node_id,
+            node_type=self.node_type,
+            data=data
+        )
         
-        return self.send_message(heartbeat_msg)
+        # Parsear de vuelta a dict para send_message
+        message_dict = MessageProtocol.parse_message(message_json)
+        
+        self.send_message(message_dict)
+        self.last_heartbeat = datetime.now()
+        logging.debug(f"Heartbeat enviado a {self.node_id}")
     
     def disconnect(self):
         """Cierra la conexión con el nodo"""
