@@ -50,7 +50,7 @@ class NodeConnection:
         self.estado = "desconectado"  # "desconectado", "conectado", "ocupado"
         self.metadata = {}  # Diccionario para datos adicionales
         
-        logging.info(f"NodeConnection creada para {self.node_id}")
+        logging.debug(f"NodeConnection creada para {self.node_id}")
     
     def connect(self, existing_socket=None):
         """
@@ -83,7 +83,7 @@ class NodeConnection:
                 self._start_send_thread()
                 self._start_receive_thread()
                 
-                logging.info(f"Conectado exitosamente a {self.node_id}")
+                logging.debug(f"Conectado exitosamente a {self.node_id}")
                 return True
                 
             except socket.timeout:
@@ -153,7 +153,7 @@ class NodeConnection:
                 logging.error(f"Error en hilo de envío para {self.node_id}: {e}")
                 break
         
-        logging.info(f"Hilo de envío terminado para {self.node_id}")
+        logging.debug(f"Hilo de envío terminado para {self.node_id}")
     
     def _receive_worker(self):
         """Hilo que recibe mensajes del socket"""
@@ -166,7 +166,7 @@ class NodeConnection:
                 length_bytes = self.socket.recv(2)
                 
                 if not length_bytes:
-                    logging.info(f"Conexión cerrada por {self.node_id}")
+                    logging.debug(f"Conexión cerrada por {self.node_id}")
                     self.connected = False
                     break
                 
@@ -177,7 +177,7 @@ class NodeConnection:
                 while len(message_bytes) < message_length:
                     chunk = self.socket.recv(message_length - len(message_bytes))
                     if not chunk:
-                        logging.info(f"Conexión cerrada por {self.node_id} durante recepción")
+                        logging.debug(f"Conexión cerrada por {self.node_id} durante recepción")
                         self.connected = False
                         break
                     message_bytes += chunk
@@ -187,11 +187,14 @@ class NodeConnection:
                 
                 # Decodificar mensaje
                 message_dict = json.loads(message_bytes.decode())
-                logging.info(f"Mensaje recibido de {self.node_id}: {message_dict.get('type', 'unknown')}")
                 
                 # Actualizar último heartbeat si es un heartbeat
-                if message_dict.get('type') == 'heartbeat':
+                msg_type = message_dict.get('type')
+                if msg_type == 'heartbeat':
                     self.last_heartbeat = datetime.now()
+                    logging.debug(f"Heartbeat recibido de {self.node_id}")
+                else:
+                    logging.info(f"Mensaje recibido de {self.node_id}: {msg_type}")
                 
                 # Llamar callback si está definido
                 if self.on_message_callback:
@@ -215,7 +218,7 @@ class NodeConnection:
                 self.connected = False
                 break
         
-        logging.info(f"Hilo de recepción terminado para {self.node_id}")
+        logging.debug(f"Hilo de recepción terminado para {self.node_id}")
     
     def send_message(self, message_dict):
         """

@@ -16,7 +16,7 @@ from node_connection import NodeConnection
 
 # config del logging (igual que en el server)
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 
@@ -78,8 +78,9 @@ class ScrapperNode2():
         msg_type = message_dict.get('type')
         
         if msg_type == 'heartbeat':
-            logging.info(f"Heartbeat recibido de {node_connection.node_id}")
+            # logging.debug(f"Heartbeat recibido de {node_connection.node_id}")
             # Ya se actualizó automáticamente en NodeConnection
+            pass
             
         elif msg_type == 'task':
             self._handle_task_message(node_connection, message_dict)
@@ -120,7 +121,7 @@ class ScrapperNode2():
         )
         
         if self.boss_connection.connect():
-            logging.info(f"Conectado exitosamente al jefe en {boss_ip}")
+            logging.info(f"Conectado al jefe en {boss_ip}")
             
             # Enviar identificación PERSISTENTE (NO temporal)
             self.boss_connection.send_message({
@@ -170,7 +171,7 @@ class ScrapperNode2():
         
         if conn.connect(existing_socket=existing_socket):
             self.subordinates[node_id] = conn
-            logging.info(f"Subordinado {node_id} agregado exitosamente")
+            logging.info(f"Subordinado {node_ip} agregado")
             
             # Enviar identificación como jefe
             conn.send_message({
@@ -561,13 +562,13 @@ class ScrapperNode2():
         node_ip = message_dict.get('ip')
         is_boss = message_dict.get('is_boss', False)
         
-        logging.info(f"Identificación recibida de {node_ip} (boss={is_boss})")
-        
         # Si soy jefe y un subordinado se identifica, ya lo tengo registrado
         # Si no soy jefe y el nodo es jefe, actualizar mi referencia
         if not self.i_am_boss and is_boss:
             self.boss_connection = node_connection
             logging.info(f"Jefe identificado: {node_ip}")
+        else:
+            logging.debug(f"Identificación recibida de {node_ip} (boss={is_boss})")
     
     def update_busy_status(self, is_busy):
         """Actualiza el estado de ocupado"""
@@ -839,11 +840,11 @@ class ScrapperNode2():
             "is_boss": is_boss
         }
         
-        logging.info(f"Nodo {node_type} registrado en cache: {client_ip} (boss={is_boss}, temporary={is_temporary})")
+        logging.debug(f"Nodo {node_type} registrado: {client_ip} (boss={is_boss}, temp={is_temporary})")
         
         # Si es conexión temporal, solo responder y cerrar
         if is_temporary:
-            logging.info(f"Conexión temporal de {client_ip}, respondiendo y cerrando...")
+            logging.debug(f"Conexión temporal de {client_ip}, respondiendo...")
             
             # Enviar respuesta indicando si soy jefe
             my_id_msg = {
@@ -859,7 +860,7 @@ class ScrapperNode2():
             
             # Cerrar socket temporal
             sock.close()
-            logging.info(f"Conexión temporal con {client_ip} cerrada")
+            logging.debug(f"Conexión temporal con {client_ip} cerrada")
             return
         
         # Si llegamos aquí, es conexión PERSISTENTE
@@ -1234,7 +1235,7 @@ class ScrapperNode2():
                 'is_temporary': True  # Marcar como temporal
             }
             
-            logging.info(f"Identificación enviada a {ip}")
+            logging.debug(f"Identificación enviada a {ip}")
             response = self.send_temporary_message(ip, info["port"], identification, 
                                                    expect_response=True, 
                                                    timeout=5.0, 
@@ -1246,26 +1247,19 @@ class ScrapperNode2():
                 boss_found = True
                 
                 # Crear NUEVA conexión persistente (evita conflicto de sockets)
-                logging.info(f"Estableciendo conexión persistente con jefe...")
+                logging.debug(f"Estableciendo conexión persistente con jefe...")
                 time.sleep(0.3)  # Pequeña pausa para que el jefe registre
                 
                 self.connect_to_boss(ip)
                 
-                # Iniciar heartbeats
+                # El hilo de heartbeat ya se inicia en connect_to_boss()
                 if self.boss_connection and self.boss_connection.is_connected():
-                    threading.Thread(
-                        target=self._heartbeat_loop,
-                        args=(self.boss_connection,),
-                        daemon=True
-                    ).start()
-                    logging.info("Conexión persistente establecida exitosamente")
+                    logging.info("Conexión con jefe establecida")
                 else:
                     logging.error(f"No se pudo establecer conexión persistente con {ip}")
                     boss_found = False
         
-        if boss_found:
-            logging.info("Conexión con jefe establecida exitosamente")
-        else:
+        if not boss_found:
             logging.warning("No se encontró ningún jefe que respondiera")
         
         return boss_found
