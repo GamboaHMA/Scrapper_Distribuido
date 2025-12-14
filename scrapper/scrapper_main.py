@@ -9,14 +9,17 @@ from datetime import datetime
 import struct
 import queue
 
-# Importar funciones de scrapping desde el módulo scrapper
+# Importar funciones de scrapping
 from scrapper import get_html_from_url
-from node_connection import NodeConnection
+# Importar utilidades compartidas
+from utils import NodeConnection, MessageProtocol
 
 
 # config del logging (igual que en el server)
+# Por defecto INFO, pero se puede cambiar con LOG_LEVEL=DEBUG
+log_level = os.environ.get('LOG_LEVEL', 'INFO').upper()
 logging.basicConfig(
-    level=logging.DEBUG,
+    level=getattr(logging, log_level, logging.INFO),
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 
