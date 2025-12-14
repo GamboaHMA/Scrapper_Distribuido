@@ -75,6 +75,7 @@ def comparar_lista_ips(ips:list):
             # Si son iguales, continuamos con la siguiente parte
     
     return mayor_ip
+
 NODE_TYPE = 'db'
 PORT = 8080
 
@@ -232,11 +233,11 @@ class DatabaseNode:
         while True:
             try:
                 ips = socket.getaddrinfo(rm_nums(self.name), self.port, proto=socket.IPPROTO_TCP)
-                ip_addreses = [item[4][0] for item in ips]
-                logging.info(f"Contenedores {rm_nums(self.name)} encontrados: {ip_addreses}")
+                ip_addresses = [item[4][0] for item in ips]
+                logging.info(f"Contenedores {rm_nums(self.name)} encontrados: {ip_addresses}")
                 
                 # intentar conectar con cada ip
-                for ip in ip_addreses:
+                for ip in ip_addresses:
                     if ip == self.ip:
                         continue
 
@@ -277,6 +278,7 @@ class DatabaseNode:
         return None
 
     #=================para conectarse a otros nodos==================
+
 
     #===================Para el envio de mensajes==================== 
 
@@ -470,7 +472,7 @@ class DatabaseNode:
                 logging.error(f"Error al encolar mensaje de lider: {e}")
 
         else:
-            for ip, conn in self.conexiones_activas.items():
+            for ip, conn in self.conexiones_activas.items():    
                 self._enqueue_message(leader_message, ip, conn)
                 logging.info(f"mensaje de lider a {ip} encolado")
 
@@ -491,7 +493,7 @@ class DatabaseNode:
 
         while(True):
             logging.info('entrando al ciclo principal')
-            logging.info(f"lider actual {self.lider}")
+            logging.info(f"lider actual: {self.lider}")
             time.sleep(20)
 
     #======================bucle principal=========================
