@@ -15,7 +15,17 @@ class MessageProtocol:
         'HEARTBEAT_RESPONSE': 'heartbeat_response',
         'NODE_LIST': 'node_list',
         'JOIN_NETWORK': 'join_network',
-        'LEAVE_NETWORK': 'leave_network'
+        'LEAVE_NETWORK': 'leave_network',
+        
+        # SCRAPPER SECTION
+        'IDENTIFICATION': 'identification',
+        'TASK_ASSIGNMENT': 'task_assignment',
+        'TASK_RESULT': 'task_result',
+        'STATUS_UPDATE': 'status_update',
+        'TASK_ACCEPTED': 'task_accepted',
+        'TASK_REJECTION': 'task_rejection',
+        'ELECTION_RESPONSE': 'election_response',
+        'NEW_BOSS': 'new_boss'
     }
 
     @staticmethod

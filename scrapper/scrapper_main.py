@@ -70,6 +70,25 @@ class ScrapperNode2():
         self.heartbeat_timeout = 90  # segundos sin heartbeat antes de considerar muerto
         self.heartbeat_check_interval = 30  # revisar cada 30 segundos
     
+    def _create_message(self, msg_type, data=None):
+        """
+        Helper para crear mensajes usando MessageProtocol.
+        
+        Args:
+            msg_type (str): Tipo de mensaje (usar MessageProtocol.MESSAGE_TYPES)
+            data (dict, optional): Datos adicionales del mensaje
+        
+        Returns:
+            dict: Mensaje estructurado listo para enviar
+        """
+        message_json = MessageProtocol.create_message(
+            msg_type=msg_type,
+            sender_id=self.my_id,
+            node_type=self.node_type,
+            data=data
+        )
+        return json.loads(message_json)  # Retornar como dict para NodeConnection
+    
     def _handle_message_from_node(self, node_connection, message_dict):
         """
         Callback que se llama cuando se recibe un mensaje de cualquier nodo.
@@ -92,7 +111,8 @@ class ScrapperNode2():
             self._handle_identification(node_connection, message_dict)
             
         elif msg_type == 'status_update':
-            node_connection.is_busy = message_dict.get('is_busy', False)
+            data = message_dict.get('data', {})
+            node_connection.is_busy = data.get('is_busy', False)
             logging.info(f"Estado actualizado para {node_connection.node_id}: busy={node_connection.is_busy}")
         
         # elif msg_type == 'election':
@@ -127,14 +147,17 @@ class ScrapperNode2():
             logging.info(f"Conectado al jefe en {boss_ip}")
             
             # Enviar identificación PERSISTENTE (NO temporal)
-            self.boss_connection.send_message({
-                'type': 'identification',
-                'node_type': self.node_type,
-                'ip': self.my_ip,
-                'port': self.scrapper_port,
-                'is_boss': False,
-                'is_temporary': False  # Marcar como persistente
-            })
+            self.boss_connection.send_message(
+                self._create_message(
+                    MessageProtocol.MESSAGE_TYPES['IDENTIFICATION'],
+                    data={
+                        'ip': self.my_ip,
+                        'port': self.scrapper_port,
+                        'is_boss': False,
+                        'is_temporary': False
+                    }
+                )
+            )
             
             # Iniciar envío periódico de heartbeats
             threading.Thread(
@@ -177,13 +200,16 @@ class ScrapperNode2():
             logging.info(f"Subordinado {node_ip} agregado")
             
             # Enviar identificación como jefe
-            conn.send_message({
-                'type': 'identification',
-                'node_type': self.node_type,
-                'ip': self.my_ip,
-                'port': self.scrapper_port,
-                'is_boss': True
-            })
+            conn.send_message(
+                self._create_message(
+                    MessageProtocol.MESSAGE_TYPES['IDENTIFICATION'],
+                    data={
+                        'ip': self.my_ip,
+                        'port': self.scrapper_port,
+                        'is_boss': True
+                    }
+                )
+            )
             
             # Iniciar heartbeats
             threading.Thread(
@@ -493,8 +519,9 @@ class ScrapperNode2():
     
     def _handle_task_message(self, node_connection, message_dict):
         """Procesa un mensaje de tarea"""
-        task_id = message_dict.get("task_id")
-        task_data = message_dict.get("task_data")
+        data = message_dict.get('data', {})
+        task_id = data.get("task_id")
+        task_data = data.get("task_data")
         
         if not task_id or not task_data:
             logging.error(f"Mensaje de tarea inválido: {message_dict}")
@@ -502,18 +529,22 @@ class ScrapperNode2():
         
         if self.is_busy:
             logging.warning(f"Ocupado, rechazando tarea {task_id}")
-            node_connection.send_message({
-                "type": "task_rejection",
-                "task_id": task_id,
-                "reason": "busy"
-            })
+            rejection_msg = self._create_message(
+                MessageProtocol.MESSAGE_TYPES['TASK_REJECTION'],
+                {
+                    "task_id": task_id,
+                    "reason": "busy"
+                }
+            )
+            node_connection.send_message(rejection_msg)
             return
         
         # Aceptar tarea
-        node_connection.send_message({
-            "type": "task_accepted",
-            "task_id": task_id
-        })
+        acceptance_msg = self._create_message(
+            MessageProtocol.MESSAGE_TYPES['TASK_ACCEPTED'],
+            {"task_id": task_id}
+        )
+        node_connection.send_message(acceptance_msg)
         
         # Ejecutar en hilo separado
         threading.Thread(
@@ -551,19 +582,23 @@ class ScrapperNode2():
             }
         
         # Enviar resultado
-        node_connection.send_message({
-            'type': 'task_result',
-            'task_id': task_id,
-            'result': result,
-            'completed_at': datetime.now().isoformat()
-        })
+        result_msg = self._create_message(
+            MessageProtocol.MESSAGE_TYPES['TASK_RESULT'],
+            {
+                'task_id': task_id,
+                'result': result,
+                'completed_at': datetime.now().isoformat()
+            }
+        )
+        node_connection.send_message(result_msg)
         
         self.update_busy_status(False)
     
     def _handle_identification(self, node_connection, message_dict):
         """Procesa mensaje de identificación"""
-        node_ip = message_dict.get('ip')
-        is_boss = message_dict.get('is_boss', False)
+        data = message_dict.get('data', {})
+        node_ip = data.get('ip')
+        is_boss = data.get('is_boss', False)
         
         # Si soy jefe y un subordinado se identifica, ya lo tengo registrado
         # Si no soy jefe y el nodo es jefe, actualizar mi referencia
@@ -581,10 +616,11 @@ class ScrapperNode2():
             
             # Notificar al jefe
             if self.boss_connection and self.boss_connection.is_connected():
-                self.boss_connection.send_message({
-                    'type': 'status_update',
-                    'is_busy': self.is_busy
-                })
+                status_msg = self._create_message(
+                    MessageProtocol.MESSAGE_TYPES['STATUS_UPDATE'],
+                    {'is_busy': self.is_busy}
+                )
+                self.boss_connection.send_message(status_msg)
         
     def discover_nodes(self, node_alias, node_port):
         """Descubre nodos utilizando el DNS interno de Docker.
@@ -830,9 +866,10 @@ class ScrapperNode2():
         """Maneja mensaje de identificación entrante"""
         # Registrar nodo en cache de conocidos
         node_type = message.get('node_type', 'scrapper')
-        node_port = message.get('port', self.scrapper_port)
-        is_boss = message.get('is_boss', False)
-        is_temporary = message.get('is_temporary', False)  # Nuevo flag
+        data = message.get('data', {})
+        node_port = data.get('port', self.scrapper_port)
+        is_boss = data.get('is_boss', False)
+        is_temporary = data.get('is_temporary', False)  # Nuevo flag
         
         if node_type not in self.known_nodes:
             self.known_nodes[node_type] = {}
@@ -850,13 +887,14 @@ class ScrapperNode2():
             logging.debug(f"Conexión temporal de {client_ip}, respondiendo...")
             
             # Enviar respuesta indicando si soy jefe
-            my_id_msg = {
-                'type': 'identification',
-                'node_type': self.node_type,
-                'ip': self.my_ip,
-                'port': self.scrapper_port,
-                'is_boss': self.i_am_boss
-            }
+            my_id_msg = self._create_message(
+                MessageProtocol.MESSAGE_TYPES['IDENTIFICATION'],
+                {
+                    'ip': self.my_ip,
+                    'port': self.scrapper_port,
+                    'is_boss': self.i_am_boss
+                }
+            )
             id_bytes = json.dumps(my_id_msg).encode()
             sock.send(len(id_bytes).to_bytes(2, 'big'))
             sock.send(id_bytes)
@@ -881,13 +919,14 @@ class ScrapperNode2():
             logging.info(f"Soy jefe, agregando subordinado {client_ip}")
             
             # Enviar mi identificación como jefe
-            my_id_msg = {
-                'type': 'identification',
-                'node_type': self.node_type,
-                'ip': self.my_ip,
-                'port': self.scrapper_port,
-                'is_boss': self.i_am_boss
-            }
+            my_id_msg = self._create_message(
+                MessageProtocol.MESSAGE_TYPES['IDENTIFICATION'],
+                {
+                    'ip': self.my_ip,
+                    'port': self.scrapper_port,
+                    'is_boss': self.i_am_boss
+                }
+            )
             id_bytes = json.dumps(my_id_msg).encode()
             sock.send(len(id_bytes).to_bytes(2, 'big'))
             sock.send(id_bytes)
@@ -916,7 +955,8 @@ class ScrapperNode2():
             self.boss_connection.disconnect()
             self.boss_connection = None
             
-        sender_ip = message.get('ip', client_ip)
+        data = message.get('data', {})
+        sender_ip = data.get('ip', client_ip)
         
         logging.info(f"Mensaje de elección recibido de {sender_ip}")
         
@@ -925,11 +965,13 @@ class ScrapperNode2():
             # Mi IP es mayor, respondo que estoy vivo (y puedo ser jefe)
             logging.info(f"Mi IP ({self.my_ip}) > IP del candidato ({sender_ip}). Respondiendo.")
             
-            response_msg = {
-                'type': 'election_response',
-                'ip': self.my_ip,
-                'port': self.scrapper_port
-            }
+            response_msg = self._create_message(
+                MessageProtocol.MESSAGE_TYPES['ELECTION_RESPONSE'],
+                {
+                    'ip': self.my_ip,
+                    'port': self.scrapper_port
+                }
+            )
             response_bytes = json.dumps(response_msg).encode()
             
             try:
@@ -952,15 +994,19 @@ class ScrapperNode2():
     
     def _handle_election_message(self, node_connection, message_dict):
         """Maneja mensaje de elección vía NodeConnection existente"""
-        sender_ip = message_dict.get('ip', node_connection.ip)
+        data = message_dict.get('data', {})
+        sender_ip = data.get('ip', node_connection.ip)
         
         if self.my_ip > sender_ip:
             logging.info(f"Elección vía conexión: Mi IP mayor, respondiendo")
-            node_connection.send_message({
-                'type': 'election_response',
-                'ip': self.my_ip,
-                'port': self.scrapper_port
-            })
+            response_msg = self._create_message(
+                MessageProtocol.MESSAGE_TYPES['ELECTION_RESPONSE'],
+                {
+                    'ip': self.my_ip,
+                    'port': self.scrapper_port
+                }
+            )
+            node_connection.send_message(response_msg)
             # Iniciar propias elecciones
             threading.Thread(target=self.call_elections, daemon=True).start()
     
@@ -969,7 +1015,8 @@ class ScrapperNode2():
         Maneja respuesta de elección.
         Significa que hay un nodo con IP mayor vivo, así que no soy jefe.
         """
-        responder_ip = message_dict.get('ip', node_connection.ip)
+        data = message_dict.get('data', {})
+        responder_ip = data.get('ip', node_connection.ip)
         logging.info(f"Respuesta de elección recibida de {responder_ip}. No soy jefe.")
     
     def _handle_new_boss_announcement(self, node_connection, message_dict):
@@ -977,8 +1024,9 @@ class ScrapperNode2():
         Maneja anuncio de nuevo jefe vía conexión persistente.
         Este es un caso especial donde recibimos el anuncio a través de una conexión existente.
         """
-        new_boss_ip = message_dict.get('ip')
-        new_boss_port = message_dict.get('port', self.scrapper_port)
+        data = message_dict.get('data', {})
+        new_boss_ip = data.get('ip')
+        new_boss_port = data.get('port', self.scrapper_port)
         
         logging.info(f"📢 Anuncio de nuevo jefe recibido vía conexión persistente: {new_boss_ip}")
         
@@ -1005,8 +1053,9 @@ class ScrapperNode2():
             self.boss_connection.disconnect()
             self.boss_connection = None
 
-        new_boss_ip = message.get('ip', client_ip)
-        new_boss_port = message.get('port', self.scrapper_port)
+        data = message.get('data', {})
+        new_boss_ip = data.get('ip', client_ip)
+        new_boss_port = data.get('port', self.scrapper_port)
         
         logging.info(f"📢 Anuncio de nuevo jefe recibido: {new_boss_ip}:{new_boss_port}")
         
@@ -1105,11 +1154,13 @@ class ScrapperNode2():
         someone_responded = False
         
         for ip, port in higher_ip_nodes:
-            election_msg = {
-                'type': 'election',
-                'ip': self.my_ip,
-                'port': self.scrapper_port
-            }
+            election_msg = self._create_message(
+                MessageProtocol.MESSAGE_TYPES['ELECTION'],
+                {
+                    'ip': self.my_ip,
+                    'port': self.scrapper_port
+                }
+            )
             
             logging.info(f"Mensaje de elección enviado a {ip}")
             response = self.send_temporary_message(ip, port, election_msg, 
@@ -1117,7 +1168,7 @@ class ScrapperNode2():
                                                    timeout=3.0, 
                                                    node_type="scrapper")
             
-            if response and response.get('type') == 'election_response':
+            if response and response.get('type') == MessageProtocol.MESSAGE_TYPES['ELECTION_RESPONSE']:
                 # ¡Hay alguien con IP mayor vivo!
                 logging.info(f"✓ Respuesta recibida de {ip}. Él será el jefe.")
                 someone_responded = True
@@ -1168,12 +1219,13 @@ class ScrapperNode2():
         for ip in all_known_ips:
             port = self.known_nodes.get("scrapper", {}).get(ip, {}).get("port", self.scrapper_port)
             
-            new_boss_msg = {
-                'type': 'new_boss',
-                'node_type': self.node_type,
-                'ip': self.my_ip,
-                'port': self.scrapper_port
-            }
+            new_boss_msg = self._create_message(
+                MessageProtocol.MESSAGE_TYPES['NEW_BOSS'],
+                {
+                    'ip': self.my_ip,
+                    'port': self.scrapper_port
+                }
+            )
             
             if self.send_temporary_message(ip, port, new_boss_msg, 
                                            expect_response=False, 
@@ -1230,13 +1282,14 @@ class ScrapperNode2():
                 continue
             
             # Enviar identificación TEMPORAL (para descubrimiento solamente)
-            identification = {
-                'type': 'identification',
-                'node_type': node_type,
-                'node_port': self.scrapper_port,
-                'is_boss': self.i_am_boss,
-                'is_temporary': True  # Marcar como temporal
-            }
+            identification = self._create_message(
+                MessageProtocol.MESSAGE_TYPES['IDENTIFICATION'],
+                {
+                    'node_port': self.scrapper_port,
+                    'is_boss': self.i_am_boss,
+                    'is_temporary': True  # Marcar como temporal
+                }
+            )
             
             logging.debug(f"Identificación enviada a {ip}")
             response = self.send_temporary_message(ip, info["port"], identification, 
@@ -1244,10 +1297,13 @@ class ScrapperNode2():
                                                    timeout=5.0, 
                                                    node_type=node_type)
             
-            if response and response.get('type') == 'identification' and response.get('is_boss', False):
-                # ¡Es el jefe!
-                logging.info(f"¡Jefe encontrado en {ip}!")
-                boss_found = True
+            if response and response.get('type') == MessageProtocol.MESSAGE_TYPES['IDENTIFICATION']:
+                # Extraer datos del campo 'data'
+                response_data = response.get('data', {})
+                if response_data.get('is_boss', False):
+                    # ¡Es el jefe!
+                    logging.info(f"¡Jefe encontrado en {ip}!")
+                    boss_found = True
                 
                 # Crear NUEVA conexión persistente (evita conflicto de sockets)
                 logging.debug(f"Estableciendo conexión persistente con jefe...")
