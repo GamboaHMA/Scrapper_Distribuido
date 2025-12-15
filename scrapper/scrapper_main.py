@@ -12,7 +12,7 @@ import queue
 # Importar funciones de scrapping
 from .scrapper import get_html_from_url
 # Importar utilidades compartidas
-from .utils import NodeConnection, MessageProtocol
+from base_node.utils import NodeConnection, MessageProtocol
 
 
 # Por defecto INFO, pero se puede cambiar con LOG_LEVEL=DEBUG

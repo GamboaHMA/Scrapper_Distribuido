@@ -252,3 +252,57 @@ logs-scrapper-node: ## Ver logs del primer ScrapperNode
 	else \
 		echo "$(RED)No hay ScrapperNodes en ejecución$(NC)"; \
 	fi
+
+# =============================================================================
+# ROUTER NODE (Nueva Arquitectura con Node Base)
+# =============================================================================
+
+ROUTER_NODE_IMAGE = router_node
+
+build-router-node: ## Construir imagen del RouterNode (hereda de Node)
+	@echo "$(YELLOW)Construyendo RouterNode (con herencia de Node base)...$(NC)"
+	docker build -t $(ROUTER_NODE_IMAGE) -f router/Dockerfile .
+	@echo "$(GREEN)✅ RouterNode construido$(NC)"
+
+run-router-node: network ## Ejecutar un RouterNode
+	@echo "$(YELLOW)Iniciando RouterNode...$(NC)"
+	docker run -d --name router-node-$(shell date +%s) \
+		--network $(NETWORK_NAME) \
+		--network-alias router \
+		-e LOG_LEVEL=INFO \
+		$(ROUTER_NODE_IMAGE)
+	@echo "$(GREEN)✅ RouterNode iniciado$(NC)"
+
+run-router-node-debug: network ## Ejecutar RouterNode en modo DEBUG
+	@echo "$(YELLOW)Iniciando RouterNode en modo DEBUG...$(NC)"
+	docker run -it --rm --name router-node-debug \
+		--network $(NETWORK_NAME) \
+		--network-alias router \
+		-e LOG_LEVEL=DEBUG \
+		$(ROUTER_NODE_IMAGE)
+
+run-router-nodes: network ## Ejecutar múltiples RouterNodes (NUM=3 por defecto)
+	@echo "$(YELLOW)Iniciando $(or $(NUM),3) RouterNodes...$(NC)"
+	@for i in $$(seq 1 $(or $(NUM),3)); do \
+		docker run -d --name router-node-$$i \
+			--network $(NETWORK_NAME) \
+			--network-alias router \
+			-e LOG_LEVEL=INFO \
+			$(ROUTER_NODE_IMAGE); \
+		echo "$(GREEN)✅ RouterNode $$i iniciado$(NC)"; \
+	done
+
+clean-router-nodes: ## Limpiar todos los RouterNodes
+	@echo "$(YELLOW)Limpiando RouterNodes...$(NC)"
+	-docker stop $$(docker ps -aq --filter ancestor=$(ROUTER_NODE_IMAGE))
+	-docker rm $$(docker ps -aq --filter ancestor=$(ROUTER_NODE_IMAGE))
+	@echo "$(GREEN)✅ RouterNodes limpiados$(NC)"
+
+logs-router-node: ## Ver logs del primer RouterNode
+	@CONTAINER=$$(docker ps --filter ancestor=$(ROUTER_NODE_IMAGE) --format "{{.Names}}" | head -1); \
+	if [ -n "$$CONTAINER" ]; then \
+		echo "$(GREEN)Logs de $$CONTAINER:$(NC)"; \
+		docker logs -f $$CONTAINER; \
+	else \
+		echo "$(RED)No hay RouterNodes en ejecución$(NC)"; \
+	fi

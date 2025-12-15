@@ -31,6 +31,12 @@ class MessageProtocol:
         'NEW_TASK': 'new_task',
         'TASK_COMPLETED': 'task_completed',
         
+        # ROUTER SECTION (Router <-> Clientes/BD/Scrapper)
+        'CLIENT_REQUEST': 'client_request',
+        'BD_QUERY': 'bd_query',
+        'BD_QUERY_RESPONSE': 'bd_query_response',
+        'SCRAPPER_RESULT': 'scrapper_result',
+        
         # DATABASE COMMUNICATION
         'SAVE_DATA': 'save_data',
         'SAVE_CONFIRMATION': 'save_confirmation'

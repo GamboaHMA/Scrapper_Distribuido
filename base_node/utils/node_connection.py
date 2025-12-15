@@ -13,21 +13,27 @@ class NodeConnection:
     Maneja tanto el envío como la recepción de mensajes de forma asíncrona.
     """
     
-    def __init__(self, node_type, ip, port, on_message_callback=None):
+    def __init__(self, node_type, ip, port, on_message_callback=None, sender_node_type=None, sender_id=None):
         """
         Inicializa una conexión con un nodo.
         
         Args:
-            node_type (str): Tipo de nodo ('scrapper', 'bd', 'router')
-            ip (str): Dirección IP del nodo
-            port (int): Puerto del nodo
+            node_type (str): Tipo de nodo REMOTO ('scrapper', 'bd', 'router')
+            ip (str): Dirección IP del nodo remoto
+            port (int): Puerto del nodo remoto
             on_message_callback (callable, optional): Función que se llama al recibir un mensaje.
                                                       Debe aceptar (node_connection, message_dict)
+            sender_node_type (str, optional): Tipo del nodo LOCAL que envía mensajes
+            sender_id (str, optional): ID del nodo LOCAL que envía mensajes
         """
-        self.node_type = node_type
+        self.node_type = node_type  # Tipo del nodo remoto
         self.ip = ip
         self.port = port
-        self.node_id = f"{node_type}-{ip}:{port}"
+        self.node_id = f"{node_type}-{ip}:{port}"  # ID del nodo remoto
+        
+        # Información del nodo local (quien envía mensajes)
+        self.sender_node_type = sender_node_type if sender_node_type else node_type
+        self.sender_id = sender_id if sender_id else self.node_id
         
         # Socket y estado de conexión
         self.socket = None
@@ -275,8 +281,8 @@ class NodeConnection:
         # Crear mensaje usando MessageProtocol
         message_json = MessageProtocol.create_message(
             msg_type=MessageProtocol.MESSAGE_TYPES['HEARTBEAT'],
-            sender_id=self.node_id,
-            node_type=self.node_type,
+            sender_id=self.sender_id,
+            node_type=self.sender_node_type,
             data=data
         )
         

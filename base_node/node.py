@@ -13,7 +13,7 @@ import sys
 # Agregar el directorio padre al path para imports absolutos
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from scrapper.utils import NodeConnection, MessageProtocol
+from base_node.utils import NodeConnection, MessageProtocol
 
 PORTS = {
     'scrapper': 8080,
@@ -61,7 +61,7 @@ class Node:
         self.heartbeat_check_interval = 30  # revisar cada 30 segundos
         
         self.persistent_message_handler = {
-            # MessageProtocol.MESSAGE_TYPES['HEARTBEAT']: self._handle_heartbeat,
+            MessageProtocol.MESSAGE_TYPES['HEARTBEAT']: self._handle_heartbeat,
             MessageProtocol.MESSAGE_TYPES['IDENTIFICATION']: self._handle_identification,
             MessageProtocol.MESSAGE_TYPES['STATUS_UPDATE']: self._handle_status_update,
             # Agregar más manejadores según los tipos de mensaje necesarios
@@ -111,20 +111,40 @@ class Node:
             handler(node_connection, data)
         else:
             logging.warning(f"No hay manejador para el tipo de mensaje: {msg_type} de {sender_id}")
-    
+            
+    def _handle_heartbeat(self, node_connection, message_dict):
+        """Procesa mensaje de heartbeat"""
+        # ya el NodeConnection maneja el update del heartbeat
+        pass
+        
     def _handle_identification(self, node_connection, message_dict):
         """Procesa mensaje de identificación"""
         data = message_dict.get('data', {})
         node_ip = data.get('ip')
+        # node_port = data.get('port', self.port)
         is_boss = data.get('is_boss', False)
+        
+        # Obtener el tipo de nodo del remitente
+        sender_node_type = message_dict.get('node_type', self.node_type)
+        
+        # Registrar en known_nodes usando el tipo del remitente
+        if node_ip:
+            if sender_node_type not in self.known_nodes:
+                self.known_nodes[sender_node_type] = {}
+            
+            self.known_nodes[sender_node_type][node_ip] = {
+                "port": data.get('port', self.port),
+                "last_seen": datetime.now(),
+                "is_boss": is_boss
+            }
         
         # Si soy jefe y un subordinado se identifica, ya lo tengo registrado
         # Si no soy jefe y el nodo es jefe, actualizar mi referencia
         if not self.i_am_boss and is_boss:
             self.boss_connection = node_connection
-            logging.info(f"Jefe identificado: {node_ip}")
+            logging.info(f"Jefe {sender_node_type} identificado: {node_ip}")
         else:
-            logging.debug(f"Identificación recibida de {node_ip} (boss={is_boss})")
+            logging.debug(f"Identificación recibida de {sender_node_type} {node_ip} (boss={is_boss})")
     
     def _handle_status_update(self, node_connection, message_dict):
         data = message_dict.get('data', {})
@@ -140,20 +160,23 @@ class Node:
         """
         data = message.get('data', {})
         is_boss = data.get('is_boss', False)
-        node_port = data.get('node_port', self.port)
+        # node_port = data.get('node_port', self.port)
         is_temporary = data.get('is_temporary', False)
         
-        # Registrar el nodo en known_nodes
-        if self.node_type not in self.known_nodes:
-            self.known_nodes[self.node_type] = {}
+        # Obtener el tipo de nodo del remitente (del mensaje raíz)
+        sender_node_type = message.get('node_type', self.node_type)
         
-        self.known_nodes[self.node_type][client_ip] = {
-            "port": node_port,
+        # Registrar el nodo en known_nodes usando el tipo del remitente
+        if sender_node_type not in self.known_nodes:
+            self.known_nodes[sender_node_type] = {}
+        
+        self.known_nodes[sender_node_type][client_ip] = {
+            "port": self.port,
             "last_seen": datetime.now(),
             "is_boss": is_boss
         }
         
-        logging.debug(f"Nodo {client_ip} registrado (boss={is_boss}, temporary={is_temporary})")
+        logging.debug(f"Nodo {sender_node_type} {client_ip} registrado (boss={is_boss}, temporary={is_temporary})")
         
         # CASO 1: Conexión temporal (broadcast_identification)
         if is_temporary:
@@ -171,8 +194,8 @@ class Node:
                 try:
                     # Enviar respuesta
                     response_bytes = json.dumps(response).encode()
-                    sock.send(len(response_bytes).to_bytes(2, 'big'))
-                    sock.send(response_bytes)
+                    sock.sendall(len(response_bytes).to_bytes(2, 'big'))
+                    sock.sendall(response_bytes)
                     logging.debug(f"Respuesta de jefe enviada a {client_ip}")
                 except Exception as e:
                     logging.error(f"Error enviando respuesta a {client_ip}: {e}")
@@ -286,7 +309,9 @@ class Node:
             self.node_type, 
             boss_ip, 
             self.port,
-            on_message_callback=self._handle_message_from_node
+            on_message_callback=self._handle_message_from_node,
+            sender_node_type=self.node_type,
+            sender_id=self.node_id
         )
         
         if self.boss_connection.connect():
@@ -373,7 +398,9 @@ class Node:
             self.node_type,
             node_ip,
             self.port,
-            on_message_callback=self._handle_message_from_node
+            on_message_callback=self._handle_message_from_node,
+            sender_node_type=self.node_type,
+            sender_id=self.node_id
         )
         
         if conn.connect(existing_socket=existing_socket):
@@ -451,9 +478,9 @@ class Node:
             message_bytes = json.dumps(message_dict).encode()
             message_length = len(message_bytes)
             
-            # Enviar longitud (2 bytes) + mensaje
-            temp_sock.send(message_length.to_bytes(2, 'big'))
-            temp_sock.send(message_bytes)
+            # Enviar longitud (2 bytes) + mensaje (usando sendall para asegurar envío completo)
+            temp_sock.sendall(message_length.to_bytes(2, 'big'))
+            temp_sock.sendall(message_bytes)
             
             logging.debug(f"Mensaje temporal enviado a {target_ip}:{target_port} - tipo: {message_dict.get('type', 'unknown')}")
             
