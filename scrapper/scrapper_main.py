@@ -127,6 +127,7 @@ class TaskQueue:
             }
             return stats
 
+NODE_TYPE_SCRAPPER = "scrapper"
 class ScrapperNode2():
     def __init__(self, scrapper_port = 8080, bd_port = 9090, router_port = 7070) -> None:
         self.node_type = "scrapper"
