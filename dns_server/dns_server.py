@@ -282,6 +282,7 @@ class ServiceDiscoverer:
             try:
                 # esperar mensaje con timeout para poder verificar stop_event
                 message, conn = self.message_queue.get(timeout=1.0)
+                ip, port = conn.getsockname()
 
                 if message is None:
                     logging.debug('Cola de mensajes vacía, finalizando worker')
@@ -373,8 +374,7 @@ class ServiceDiscoverer:
             
             if dif > 35:
                 logging.warning(f"Nodo {node_ip} no responde (timeout de {dif:.1f}s). Eliminando conexión...")
-                if node_ip in self.conexiones_activas:
-                    del self.conexiones_activas[node_ip]
+                self.conexiones_activas[node_ip].close()
                 break
             else:
                 logging.debug(f"Nodo {node_ip} activo ({dif:.1f}s)")
