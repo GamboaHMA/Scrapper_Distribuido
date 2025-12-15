@@ -8,6 +8,9 @@ import os
 from datetime import datetime
 import struct
 import queue
+import sqlite3
+from pathlib import Path
+
 
 #========================Utils======================
 class MessageProtocol:
@@ -107,7 +110,100 @@ class DatabaseNode:
         self.db_cursor = None
         self.logs_conn = None
         self.logs_cursor = None
+        self.data_dir = f"/{self.name}"
+        logging.info("a punto de iniciar base de datos")
+        self.init_database()
+
+    #========================Database=========================
+
+    def init_database(self):
+        '''Inicializa la base de datos'''
+        try:
+            # crear directorio si no existe
+            Path(self.data_dir).mkdir(parents=None, exist_ok=True)
+
+            # base de datos para las url
+            db_path = f"{self.data_dir}/{self.name}.db"
+            self.db_conn = sqlite3.connect(db_path, check_same_thread=False)
+            self.db_cursor = self.db_conn.cursor()
+
+            # tabla de urls y su id
+            self.db_cursor.execute('''
+                CREATE TABLE IF NOT EXISTS urls (
+                    url_id INTEGER PRIMARY KEY,
+                    url TEXT UNIQUE NOT NULL,
+                    firstseen DATETIME DEFAULT CURRENT_TIMESTAMP,
+                )
+            '''
+            )
+
+            # tabla de databases
+            self.db_cursor.execute('''
+                CREATE TABLE IF NOT EXISTS databases (
+                    database_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    node_id TEXT UNIQUE NOT NULL,
+                    database_name TEXT,
+                    is_active BOOLEAN DEFAULT 1,
+                    last_heartbeat TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(node_id, database_name)    
+                )
+
+            '''
+            )
+
+            # tabla de urls para almacenar: cantidad de replicas
+            self.db_cursor.execute('''
+                CREATE TABLE IF NOT EXISTS urls_replicas (
+                    url_id INTEGER PRIMARY KEY,
+                    current_replicas INTEGER DEFAULT 0,
+                    target_replicas INTEGER DEFAULT 3,
+                    FOREIGN KEY (url_id) REFERENCES urls(url_id) ON DELETE CASCADE            
+                )
+            '''
+            )
+
+            # tabla para guardar los contenidos de las urls (nodos no jefe)
+            self.db_cursor.execute('''
+                CREATE TABLE IF NOT EXISTS url_content (
+                    content_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    url_id INTEGER NOT NULL,
+                    content TEXT,
+                    scrapped_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (url_id) REFERENCES urls(url_id) ON DELETE CASCADE,
+                    UNIQUE(url_id)
+                )
+            '''
+            )
+
+            # tabla para guardar la tupla url-database, que nos dira en cuales bases de datos se guardo una url
+            self.db_cursor.execute('''
+                CREATE TABLE IF NOT EXISTS url_db_log (
+                    location_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    url_id INTEGER NOT NULL,
+                    database_id INTEGER NOT NULL,
+                    added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY(url_id) REFERENCES urls(url_id) ON DELETE CASCADE,
+                    FOREIGN KEY(database_id) REFERENCES databases(database_id) ON DELETE CASCADE,
+                    UNIQUE(url_id, database_id)
+                )
+          '''
+          )
+
+            self.db_conn.commit()
+            self.db_cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
+            tablas = self.db_cursor.fetchall()
+            logging.info(f"Base de datos inicializada en {self.data_dir}")
+            logging.info(f"Tablas: {tablas}")
+            
         
+        except Exception as e:
+            logging.error(f"Error inicilizando la base de datos: {e}")
+
+
+
+    #========================database=========================
+
         
 
     #=========================Escucha=========================
@@ -490,6 +586,18 @@ class DatabaseNode:
 
     #======================eleccion de lider=======================
 
+    def cerrar_nodo(self):
+        conex_activas_copy = self.conexiones_activas.copy()
+        for ip, conn in conex_activas_copy.items():
+            try:
+                conn.close()
+            except Exception:
+                pass
+        if self.db_conn:
+            self.db_conn.close()
+        self.stop_event.set()
+        logging.info(f"cerrando nodo {self.name} ip: {self.ip}")
+
     #=======================Bucle principal========================
 
     def iniciar_nodo(self):
@@ -505,11 +613,14 @@ class DatabaseNode:
             logging.info('entrando al ciclo principal')
             logging.info(f"lider actual: {self.lider}")
             time.sleep(20)
-
+            
     #======================bucle principal=========================
 
 
 
 if __name__ == "__main__":#
     databaseNode = DatabaseNode()
-    databaseNode.iniciar_nodo()
+    try:
+        databaseNode.iniciar_nodo()
+    except KeyboardInterrupt:
+        databaseNode.cerrar_nodo()
