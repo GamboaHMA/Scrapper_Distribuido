@@ -154,12 +154,12 @@ class ServiceDiscoverer:
                 except Exception as e:
                     #logging.info(f"timeout para recibir_mensaje, continuando: {e}")
                     continue                    
-                logging.info(f"Recibido de {addr}: {message}")
+                #logging.info(f"Recibido de {addr}: {message}")
         except Exception as e:
             logging.error(f"Error manejando conexion con {addr}: {e}")
 
         finally:
-            logging.info(f"Conexion cerrada con {addr}")
+            logging.info(f"Conexion cerrada con {conn.getpeername()}")
             conn.close()
             if addr[0] in self.conexiones_activas.keys():
                 del self.conexiones_activas[addr[0]]
@@ -185,7 +185,7 @@ class ServiceDiscoverer:
             #MessageProtocol.MESSAGE_TYPES['NODE_LIST']: self.handle_node_list,
         }
 
-        logging.info(f"recibiendo mensaje de {sender_id} tipo {node_type} de tipo {msg_type}")
+        #logging.info(f"recibiendo mensaje de {sender_id} tipo {node_type} de tipo {msg_type}")
         handler = handlers.get(msg_type)
         
         if handler:
@@ -293,6 +293,7 @@ class ServiceDiscoverer:
             try:
                 # esperar mensaje con timeout para poder verificar stop_event
                 message, conn = self.message_queue.get(timeout=1.0)
+                ip, port = conn.getsockname()
 
                 if message is None:
                     logging.info('message is none')
@@ -308,7 +309,7 @@ class ServiceDiscoverer:
                     logging.info('mensaje enviado')
 
                 except Exception as e:
-                    logging.error(f"Error enviando mensaje: {e}")
+                    logging.error(f"Error enviando mensaje a {ip}:{port} : {e}")
                     
                     if not self.stop_event.is_set():
                         self.message_queue.put(message)
@@ -383,6 +384,7 @@ class ServiceDiscoverer:
             #logging.info(f"Diferencia de {dif} segundos")
             if dif > 35:
                 logging.error(f"El nodo {node_ip} no responde, cerrando socket...")
+                self.conexiones_activas[node_ip].close()
                 del(self.conexiones_activas[node_ip])
                 break
             
