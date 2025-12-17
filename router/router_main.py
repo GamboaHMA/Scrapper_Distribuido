@@ -431,6 +431,19 @@ class RouterNode(Node):
             
             if self.bd_boss_connection.connect():
                 logging.info(f"Conectado con jefe BD en {bd_ip}")
+                
+                # Enviar identificación inicial (NO temporal, es conexión persistente)
+                identification = self._create_message(
+                    MessageProtocol.MESSAGE_TYPES['IDENTIFICATION'],
+                    {
+                        'ip': self.ip,
+                        'port': self.port,
+                        'is_boss': self.i_am_boss,
+                        'is_temporary': False
+                    }
+                )
+                self.bd_boss_connection.send_message(identification)
+                
                 self.bd_available = True
                 
                 # Iniciar heartbeats
@@ -461,6 +474,19 @@ class RouterNode(Node):
             
             if self.scrapper_boss_connection.connect():
                 logging.info(f"Conectado con jefe Scrapper en {scrapper_ip}")
+                
+                # Enviar identificación inicial (NO temporal, es conexión persistente)
+                identification = self._create_message(
+                    MessageProtocol.MESSAGE_TYPES['IDENTIFICATION'],
+                    {
+                        'ip': self.ip,
+                        'port': self.port,
+                        'is_boss': self.i_am_boss,
+                        'is_temporary': False
+                    }
+                )
+                self.scrapper_boss_connection.send_message(identification)
+                
                 self.scrapper_available = True
                 
                 # Iniciar heartbeats

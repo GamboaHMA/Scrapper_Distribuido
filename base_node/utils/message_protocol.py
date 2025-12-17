@@ -37,6 +37,12 @@ class MessageProtocol:
         'BD_QUERY_RESPONSE': 'bd_query_response',
         'SCRAPPER_RESULT': 'scrapper_result',
         
+        # REPLICATION (Jefe -> Subordinados)
+        'EXTERNAL_BOSSES_INFO': 'external_bosses_info',
+        
+        # EXTERNAL BOSS COORDINATION (Nuevo jefe -> Jefe externo)
+        'NEW_EXTERNAL_BOSS': 'new_external_boss',
+        
         # DATABASE COMMUNICATION
         'SAVE_DATA': 'save_data',
         'SAVE_CONFIRMATION': 'save_confirmation'
