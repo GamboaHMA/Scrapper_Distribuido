@@ -13,7 +13,7 @@ import sys
 # Agregar el directorio padre al path para imports absolutos
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from base_node.utils import NodeConnection, MessageProtocol
+from base_node.utils import NodeConnection, MessageProtocol, BossProfile
 
 PORTS = {
     'scrapper': 8080,
@@ -36,7 +36,7 @@ class Node:
         self.node_id = f"{self.node_type}-{self.ip}:{self.port}"
         
         self.i_am_boss = False
-        self.boss_connection = None
+        self.my_boss_profile = BossProfile(self.node_type, self.port)
         
         self.subordinates = {}
 
@@ -80,6 +80,19 @@ class Node:
             MessageProtocol.MESSAGE_TYPES['NEW_EXTERNAL_BOSS']: self._handle_new_external_boss,
             # Agregar más manejadores temporales según sea necesario
         }
+    
+    @property
+    def boss_connection(self):
+        """Propiedad para mantener compatibilidad con código existente"""
+        return self.my_boss_profile.connection
+    
+    @boss_connection.setter
+    def boss_connection(self, value):
+        """Setter para mantener compatibilidad con código existente"""
+        if value is None:
+            self.my_boss_profile.clear_connection()
+        else:
+            self.my_boss_profile.set_connection(value)
 
     def _create_message(self, msg_type, data=None):
         """
@@ -149,7 +162,7 @@ class Node:
         # Si soy jefe y un subordinado se identifica, ya lo tengo registrado
         # Si no soy jefe y el nodo es jefe, actualizar mi referencia
         if not self.i_am_boss and is_boss:
-            self.boss_connection = node_connection
+            self.my_boss_profile.set_connection(node_connection)
             logging.info(f"Jefe {sender_node_type} identificado: {node_ip}")
         else:
             logging.debug(f"Identificación recibida de {sender_node_type} {node_ip} (boss={is_boss})")
@@ -480,12 +493,12 @@ class Node:
             self.subordinates.clear()
         
         # Desconectar del jefe anterior si existía
-        if self.boss_connection:
-            old_boss_ip = self.boss_connection.ip
+        if self.my_boss_profile.connection:
+            old_boss_ip = self.my_boss_profile.connection.ip
             if old_boss_ip != new_boss_ip:
                 logging.info(f"Desconectando del jefe anterior {old_boss_ip}")
-                self.boss_connection.disconnect()
-                self.boss_connection = None
+                self.my_boss_profile.connection.disconnect()
+                self.my_boss_profile.clear_connection()
         
         # Actualizar known_nodes
         if self.node_type not in self.nodes_cache:
@@ -507,11 +520,11 @@ class Node:
         
     def connect_to_boss(self, boss_ip):
         """Conectar a mi jefe (cuando soy subordinado)"""
-        if self.boss_connection and self.boss_connection.is_connected():
+        if self.my_boss_profile.is_connected():
             logging.warning("Ya existe una conexión con el jefe")
             return True
         
-        self.boss_connection = NodeConnection(
+        new_connection = NodeConnection(
             self.node_type, 
             boss_ip, 
             self.port,
@@ -520,11 +533,11 @@ class Node:
             sender_id=self.node_id
         )
         
-        if self.boss_connection.connect():
+        if new_connection.connect():
             logging.info(f"Conectado al jefe en {boss_ip}")
             
             # Enviar identificación PERSISTENTE (NO temporal)
-            self.boss_connection.send_message(
+            new_connection.send_message(
                 self._create_message(
                     MessageProtocol.MESSAGE_TYPES['IDENTIFICATION'],
                     data={
@@ -536,17 +549,20 @@ class Node:
                 )
             )
             
+            # Establecer conexión en el perfil
+            self.my_boss_profile.set_connection(new_connection)
+            
             # Iniciar envío periódico de heartbeats
             threading.Thread(
                 target=self._heartbeat_loop,
-                args=(self.boss_connection,),
+                args=(new_connection,),
                 daemon=True
             ).start()
             
             return True
         else:
             logging.error(f"No se pudo conectar al jefe en {boss_ip}")
-            self.boss_connection = None
+            self.my_boss_profile.clear_connection()
             # Eliminar de known_nodes si no se pudo conectar
             self.remove_node_from_registry(self.node_type, boss_ip)
             return False
@@ -878,16 +894,16 @@ class Node:
         dead_nodes = []
         
         # 1. Verificar jefe (si soy subordinado)
-        if not self.i_am_boss and self.boss_connection:
+        if not self.i_am_boss and self.my_boss_profile.connection:
             # Verificar si la conexión está cerrada
-            if not self.boss_connection.is_connected():
-                boss_ip = self.boss_connection.ip
-                logging.warning(f"Jefe {self.boss_connection.node_id} desconectado (conexión cerrada)")
+            if not self.my_boss_profile.connection.is_connected():
+                boss_ip = self.my_boss_profile.connection.ip
+                logging.warning(f"Jefe {self.my_boss_profile.connection.node_id} desconectado (conexión cerrada)")
                 logging.warning("Iniciando elecciones para encontrar nuevo jefe...")
                 
                 # Desconectar del jefe muerto
-                self.boss_connection.disconnect()
-                self.boss_connection = None
+                self.my_boss_profile.connection.disconnect()
+                self.my_boss_profile.clear_connection()
                 
                 # Eliminar de known_nodes
                 self.remove_node_from_registry(self.node_type, boss_ip)
@@ -896,16 +912,16 @@ class Node:
                 threading.Thread(target=self.call_elections, daemon=True).start()
             else:
                 # La conexión está activa, verificar heartbeat
-                time_since_heartbeat = self.boss_connection.get_time_since_last_heartbeat()
+                time_since_heartbeat = self.my_boss_profile.connection.get_time_since_last_heartbeat()
                 
                 if time_since_heartbeat is not None and time_since_heartbeat > self.heartbeat_timeout:
-                    boss_ip = self.boss_connection.ip
-                    logging.warning(f"Jefe {self.boss_connection.node_id} no responde (último heartbeat hace {time_since_heartbeat:.1f}s)")
+                    boss_ip = self.my_boss_profile.connection.ip
+                    logging.warning(f"Jefe {self.my_boss_profile.connection.node_id} no responde (último heartbeat hace {time_since_heartbeat:.1f}s)")
                     logging.warning("Iniciando elecciones para encontrar nuevo jefe...")
                     
                     # Desconectar del jefe muerto
-                    self.boss_connection.disconnect()
-                    self.boss_connection = None
+                    self.my_boss_profile.connection.disconnect()
+                    self.my_boss_profile.clear_connection()
                     
                     # Eliminar de known_nodes
                     self.remove_node_from_registry(self.node_type, boss_ip)
@@ -1339,9 +1355,9 @@ class Node:
         logging.info("🔶 SOY EL NUEVO JEFE")
         
         # Cerrar conexión con jefe anterior si existía
-        if self.boss_connection:
-            self.boss_connection.disconnect()
-            self.boss_connection = None
+        if self.my_boss_profile.connection:
+            self.my_boss_profile.connection.disconnect()
+            self.my_boss_profile.clear_connection()
         
         # # Limpiar subordinados antiguos (por si acaso)
         # old_subordinates = list(self.subordinates.keys())
@@ -1494,9 +1510,9 @@ class Node:
             self.listen_socket = None
         
         # Cerrar conexión con jefe
-        if self.boss_connection:
-            self.boss_connection.disconnect()
-            self.boss_connection = None
+        if self.my_boss_profile.connection:
+            self.my_boss_profile.connection.disconnect()
+            self.my_boss_profile.clear_connection()
         
         # Cerrar conexiones con subordinados
         for node_id, conn in self.subordinates.items():
