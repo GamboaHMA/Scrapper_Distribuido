@@ -198,3 +198,111 @@ demo: build run-server ## Inicio rápido para desarrollo local
 	@echo "$(YELLOW)Comandos útiles:$(NC)"
 	@echo "  make status             # Ver estado general"
 	@echo "  make start-api          # Iniciar API REST$(NC)"
+
+# =============================================================================
+# SCRAPPER NODE (Nueva Arquitectura con Node Base)
+# =============================================================================
+
+SCRAPPER_NODE_IMAGE = scrapper_node
+
+build-scrapper-node: ## Construir imagen del nuevo ScrapperNode (hereda de Node)
+	@echo "$(YELLOW)Construyendo ScrapperNode (con herencia de Node base)...$(NC)"
+	docker build -t $(SCRAPPER_NODE_IMAGE) -f scrapper/Dockerfile .
+	@echo "$(GREEN)✅ ScrapperNode construido$(NC)"
+
+run-scrapper-node: network ## Ejecutar un ScrapperNode
+	@echo "$(YELLOW)Iniciando ScrapperNode...$(NC)"
+	docker run -d --name scrapper-node-$(shell date +%s) \
+		--network $(NETWORK_NAME) \
+		--network-alias scrapper \
+		-e LOG_LEVEL=INFO \
+		$(SCRAPPER_NODE_IMAGE)
+	@echo "$(GREEN)✅ ScrapperNode iniciado$(NC)"
+
+run-scrapper-node-debug: network ## Ejecutar ScrapperNode en modo DEBUG
+	@echo "$(YELLOW)Iniciando ScrapperNode en modo DEBUG...$(NC)"
+	docker run -it --rm --name scrapper-node-debug \
+		--network $(NETWORK_NAME) \
+		--network-alias scrapper \
+		-e LOG_LEVEL=DEBUG \
+		$(SCRAPPER_NODE_IMAGE)
+
+run-scrapper-nodes: network ## Ejecutar múltiples ScrapperNodes (NUM=3 por defecto)
+	@echo "$(YELLOW)Iniciando $(or $(NUM),3) ScrapperNodes...$(NC)"
+	@for i in $$(seq 1 $(or $(NUM),3)); do \
+		docker run -d --name scrapper-node-$$i \
+			--network $(NETWORK_NAME) \
+			--network-alias scrapper \
+			-e LOG_LEVEL=INFO \
+			$(SCRAPPER_NODE_IMAGE); \
+		echo "$(GREEN)✅ ScrapperNode $$i iniciado$(NC)"; \
+	done
+
+clean-scrapper-nodes: ## Limpiar todos los ScrapperNodes
+	@echo "$(YELLOW)Limpiando ScrapperNodes...$(NC)"
+	-docker stop $$(docker ps -aq --filter ancestor=$(SCRAPPER_NODE_IMAGE))
+	-docker rm $$(docker ps -aq --filter ancestor=$(SCRAPPER_NODE_IMAGE))
+	@echo "$(GREEN)✅ ScrapperNodes limpiados$(NC)"
+
+logs-scrapper-node: ## Ver logs del primer ScrapperNode
+	@CONTAINER=$$(docker ps --filter ancestor=$(SCRAPPER_NODE_IMAGE) --format "{{.Names}}" | head -1); \
+	if [ -n "$$CONTAINER" ]; then \
+		echo "$(GREEN)Logs de $$CONTAINER:$(NC)"; \
+		docker logs -f $$CONTAINER; \
+	else \
+		echo "$(RED)No hay ScrapperNodes en ejecución$(NC)"; \
+	fi
+
+# =============================================================================
+# ROUTER NODE (Nueva Arquitectura con Node Base)
+# =============================================================================
+
+ROUTER_NODE_IMAGE = router_node
+
+build-router-node: ## Construir imagen del RouterNode (hereda de Node)
+	@echo "$(YELLOW)Construyendo RouterNode (con herencia de Node base)...$(NC)"
+	docker build -t $(ROUTER_NODE_IMAGE) -f router/Dockerfile .
+	@echo "$(GREEN)✅ RouterNode construido$(NC)"
+
+run-router-node: network ## Ejecutar un RouterNode
+	@echo "$(YELLOW)Iniciando RouterNode...$(NC)"
+	docker run -d --name router-node-$(shell date +%s) \
+		--network $(NETWORK_NAME) \
+		--network-alias router \
+		-e LOG_LEVEL=INFO \
+		$(ROUTER_NODE_IMAGE)
+	@echo "$(GREEN)✅ RouterNode iniciado$(NC)"
+
+run-router-node-debug: network ## Ejecutar RouterNode en modo DEBUG
+	@echo "$(YELLOW)Iniciando RouterNode en modo DEBUG...$(NC)"
+	docker run -it --rm --name router-node-debug \
+		--network $(NETWORK_NAME) \
+		--network-alias router \
+		-e LOG_LEVEL=DEBUG \
+		$(ROUTER_NODE_IMAGE)
+
+run-router-nodes: network ## Ejecutar múltiples RouterNodes (NUM=3 por defecto)
+	@echo "$(YELLOW)Iniciando $(or $(NUM),3) RouterNodes...$(NC)"
+	@for i in $$(seq 1 $(or $(NUM),3)); do \
+		docker run -d --name router-node-$$i \
+			--network $(NETWORK_NAME) \
+			--network-alias router \
+			-e LOG_LEVEL=INFO \
+			$(ROUTER_NODE_IMAGE); \
+		echo "$(GREEN)✅ RouterNode $$i iniciado$(NC)"; \
+	done
+
+clean-router-nodes: ## Limpiar todos los RouterNodes
+	@echo "$(YELLOW)Limpiando RouterNodes...$(NC)"
+	-docker stop $$(docker ps -aq --filter ancestor=$(ROUTER_NODE_IMAGE))
+	-docker rm $$(docker ps -aq --filter ancestor=$(ROUTER_NODE_IMAGE))
+	@echo "$(GREEN)✅ RouterNodes limpiados$(NC)"
+
+logs-router-node: ## Ver logs del primer RouterNode
+	@CONTAINER=$$(docker ps --filter ancestor=$(ROUTER_NODE_IMAGE) --format "{{.Names}}" | head -1); \
+	if [ -n "$$CONTAINER" ]; then \
+		echo "$(GREEN)Logs de $$CONTAINER:$(NC)"; \
+		docker logs -f $$CONTAINER; \
+	else \
+		echo "$(RED)No hay RouterNodes en ejecución$(NC)"; \
+	fi

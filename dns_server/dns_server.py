@@ -8,45 +8,7 @@ import os
 import shutil
 import queue
 from datetime import datetime
-
-#utils
-
-class MessageProtocol:
-    # tipos de mensaje
-    MESSAGE_TYPES = {
-        'DISCOVERY': 'discovery',
-        'LEADER_QUERY': 'leader_query',
-        'LEADER_RESPONSE': 'leader_response',
-        'LEADER_ANNOUNCE': 'leader_announce',
-        'ELECTION': 'election',
-        'ANSWER': 'answer',
-        'COORDINATOR': 'coordinator',
-        'HEARTBEAT': 'heartbeat',
-        'HEARTBEAT_RESPONSE': 'heartbeat_response',
-        'NODE_LIST': 'node_list',
-        'JOIN_NETWORK': 'join_network',
-        'LEAVE_NETWORK': 'leave_network'
-    }
-
-    @staticmethod
-    def create_message(msg_type, sender_id, node_type, data=None, timestamp=None):
-        """Crea un mensaje JSON estandarizado"""
-        message = {
-            'type': msg_type,
-            'sender_id': sender_id,
-            'node_type': node_type,
-            'timestamp': timestamp or time.time(),
-            'data': data or {}
-        }
-        return json.dumps(message)
-    
-    @staticmethod
-    def parse_message(json_str):
-        """Parsea un mensaje JSON"""
-        try:
-            return json.loads(json_str)
-        except json.JSONDecodeError:
-            return None
+from utils import MessageProtocol
 
 def comparar_lista_ips(ips:list):
     '''Método que devuelve la mayor de las IPs en una lista'''
@@ -78,20 +40,23 @@ def comparar_lista_ips(ips:list):
     return mayor_ip
 
 
-NODE_TYPE = 'server'
+NODE_TYPE_ROUTER = 'router'
 PORT = 8080
 
+# Configuración de logging con soporte para LOG_LEVEL
+log_level = os.environ.get('LOG_LEVEL', 'INFO').upper()
 logging.basicConfig(
-    level=logging.INFO,
+    level=getattr(logging, log_level, logging.INFO),
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 
 class ServiceDiscoverer:
     def __init__(self, port=PORT):
-        self.node_type = NODE_TYPE
-        self.name = socket.gethostname()
-        logging.info(f"name: {self.name}")
-        self.ip = socket.gethostbyname(self.name)
+        self.node_type = NODE_TYPE_ROUTER  # node_type también es el network-alias de Docker
+        # self.name = socket.gethostname()
+        # logging.debug(f"Hostname: {self.name}")
+        self.ip = socket.gethostbyname(socket.gethostname())
+        logging.info(f"Nodo iniciado - Tipo: {self.node_type}, IP: {self.ip}")
         self.port = port
         self.sock_de_servidor = None
         self.escuchando = False
@@ -129,11 +94,21 @@ class ServiceDiscoverer:
         while self.escuchando:
             try:
                 conn, addr = self.sock_de_servidor.accept()
-                logging.info(f"Conexion entrante de {addr}")
-                if addr not in self.conexiones_activas.keys():
+                logging.debug(f"Conexion entrante de {addr}")
+                
+                # No aceptar conexiones de si mismo
+                if addr[0] == self.ip:
+                    logging.debug(f"Rechazando conexión de sí mismo ({self.ip})")
+                    conn.close()
+                    continue
+                
+                if addr not in self.conexiones_activas.keys() and addr[0] != self.ip:
                     self.conexiones_activas[addr[0]] = conn
+                    logging.info(f"Nueva conexión establecida con {addr[0]}")
                     threading.Thread(target=self.manejar_conexion, args=(conn, addr), daemon=True).start()
                     threading.Thread(target=self.handle_heartbeat, daemon=True, args=(addr[0],)).start()
+                else:
+                    logging.debug(f"Conexión duplicada ignorada de {addr[0]}")
             
             except Exception as e:
                 logging.error(f"Error aceptando conexion: {e}")
@@ -148,21 +123,22 @@ class ServiceDiscoverer:
                         break
                     try:
                         message_dict = json.loads(message)
+                        logging.debug(f"Mensaje recibido de {addr[0]}: {message_dict.get('type', 'unknown')}")
                         self.procesar_mensaje(message_dict, addr[0])
                     except Exception as e:
                         logging.error(f"Error procesando mensaje de {addr[0]}: {e}")
                 except Exception as e:
-                    #logging.info(f"timeout para recibir_mensaje, continuando: {e}")
-                    continue                    
-                logging.info(f"Recibido de {addr}: {message}")
+                    logging.debug(f"Timeout recibiendo mensaje de {addr[0]}, continuando")
+                    continue
         except Exception as e:
             logging.error(f"Error manejando conexion con {addr}: {e}")
 
         finally:
-            logging.info(f"Conexion cerrada con {addr}")
+            logging.info(f"Conexión cerrada con {addr[0]}")
             conn.close()
             if addr[0] in self.conexiones_activas.keys():
                 del self.conexiones_activas[addr[0]]
+                logging.debug(f"Nodo {addr[0]} eliminado de conexiones activas")
 
     def procesar_mensaje(self, message, ip):
         '''Encargado de tomar decision segun el mensaje que entra'''
@@ -185,16 +161,16 @@ class ServiceDiscoverer:
             #MessageProtocol.MESSAGE_TYPES['NODE_LIST']: self.handle_node_list,
         }
 
-        logging.info(f"recibiendo mensaje de {sender_id} tipo {node_type} de tipo {msg_type}")
+        logging.debug(f"Procesando mensaje de {sender_id} (tipo {node_type}): {msg_type}")
         handler = handlers.get(msg_type)
         
         if handler:
             try:
                 handler(message, sender_id, node_type, timestamp, data)
             except Exception as e:
-                logging.error(f"error en handler: {e}")
+                logging.error(f"Error en handler {msg_type} desde {sender_id}: {e}")
         else:
-            logging.error(f"Tipo de mensaje: {msg_type} desconocido")
+            logging.warning(f"Tipo de mensaje desconocido: {msg_type} de {sender_id}")
 
 
     def recibir_mensaje(self, socket_):
@@ -229,56 +205,69 @@ class ServiceDiscoverer:
     # =================Para conectarse a otro nodo==================
 
     def buscar_semejantes(self, intervalo=10):
-        '''Busca el ip de los contenedores que tengan el mismo network-alias que el propio contenedor'''
-
-        def rm_nums(cadena:str):
-            return ''.join(car for car in cadena if not car.isdigit())
-
-        # el --name de los contenedores es el mismo que el --network-alias, solo que --name tiene digitos
+        """
+        Descubre otros nodos del mismo tipo usando el network-alias de Docker.
+        
+        Args:
+            intervalo (int): Segundos entre cada intento de descubrimiento
+        """
         while True:
             try:
-                ips = socket.getaddrinfo(rm_nums(self.name), self.port, proto=socket.IPPROTO_TCP)
-                ip_addresses = [item[4][0] for item in ips]
-                logging.info(f"Contenedores {rm_nums(self.name)} encontrados: {ip_addresses}")
+                # Resolver directamente el node_type como network-alias (ej: 'router')
+                # Docker DNS devolverá todas las IPs de contenedores con ese alias
+                result = socket.getaddrinfo(
+                    self.node_type, 
+                    self.port, 
+                    socket.AF_INET, 
+                    socket.SOCK_STREAM
+                )
+                
+                # Extraer IPs únicas excluyendo la propia
+                ip_addresses = [addr_info[4][0] for addr_info in result]
+                ip_addresses = list(set(ip_addresses) - {self.ip})
+                logging.debug(f"Nodos '{self.node_type}' encontrados (excluyendo self): {ip_addresses}")
 
-                #intentar conectar con cada ip
+                # Intentar conectar con cada IP
                 for ip in ip_addresses:
-                    if ip == self.ip:
-                        continue
-
                     try:
                         self.conectar_a(ip)
-                    
                     except (socket.timeout, ConnectionRefusedError) as e:
-                        logging.error(f"No se pudo conectar a {ip}:{self.port}: {e}")
+                        logging.debug(f"No se pudo conectar a {ip}:{self.port}: {e}")
                 
-                time.sleep(10)
+                time.sleep(intervalo)
             
             except socket.gaierror as e:
-                logging.error(f"No se pudo resolver el name: {self.name}")
-                logging.info(f"Intentando de nuevo dentro de {intervalo} segundos")
+                logging.warning(f"No se pudo resolver node_type '{self.node_type}' en Docker DNS: {e}")
+                logging.debug(f"Reintentando en {intervalo} segundos...")
                 time.sleep(intervalo)
-                continue
+            except Exception as e:
+                logging.error(f"Error en descubrimiento de nodos: {e}")
+                time.sleep(intervalo)
 
     def conectar_a(self, destino):
+        # No conectar a si mismo
+        if destino == self.ip:
+            logging.debug(f"Evitando conexión a sí mismo ({self.ip})")
+            return None
+        
         if destino in self.conexiones_activas.keys():
-            logging.info(f"Ya existe conexion con {destino}")
+            logging.debug(f"Ya existe conexión con {destino}")
             return self.conexiones_activas[destino]
         
         try:
             sock_cliente = socket.create_connection((destino, self.port), timeout=5)
-            logging.info(f"Conectado a {destino}:{self.port}")
+            logging.info(f"Conectado exitosamente a {destino}:{self.port}")
             self.conexiones_activas[destino] = sock_cliente
             self.control_de_latidos[destino] = datetime.now()
-            # iniciar hilo de timeout para la posible desconexion
-            logging.info("antes de entrar al hilo de handle_heartbeat")
+            # iniciar hilos de manejo
+            logging.debug(f"Iniciando hilos de manejo para {destino}")
             threading.Thread(target=self.manejar_conexion, daemon=True, args=(sock_cliente, sock_cliente.getsockname())).start()
             threading.Thread(target=self.handle_heartbeat, daemon=True, args=(destino,)).start()
             return sock_cliente
         except socket.timeout:
-            logging.error(f"Timeout error al conectarse a {destino}")
+            logging.debug(f"Timeout al conectarse a {destino}")
         except socket.error as e:
-            logging.error(f"Error conectando a {destino[0]}:{destino[1]} - {e}")
+            logging.debug(f"Error conectando a {destino}: {e}")
                           
         return None
 
@@ -293,9 +282,10 @@ class ServiceDiscoverer:
             try:
                 # esperar mensaje con timeout para poder verificar stop_event
                 message, conn = self.message_queue.get(timeout=1.0)
+                ip, port = conn.getsockname()
 
                 if message is None:
-                    logging.info('message is none')
+                    logging.debug('Cola de mensajes vacía, finalizando worker')
                     break
 
                 try:
@@ -305,10 +295,10 @@ class ServiceDiscoverer:
                     
                     # enviar mensaje completo
                     conn.send(message)
-                    logging.info('mensaje enviado')
+                    logging.debug('Mensaje enviado exitosamente')
 
                 except Exception as e:
-                    logging.error(f"Error enviando mensaje: {e}")
+                    logging.error(f"Error enviando mensaje (reintentando): {e}")
                     
                     if not self.stop_event.is_set():
                         self.message_queue.put(message)
@@ -355,12 +345,11 @@ class ServiceDiscoverer:
                     timestamp=datetime.now().isoformat()
                 )
 
-                logging.info(f"conexiones activas {self.conexiones_activas}")
+                logging.debug(f"Conexiones activas: {len(self.conexiones_activas)} nodos")
                 connections_copy = self.conexiones_activas.copy()
                 for ip, conn in connections_copy.items():
-                    logging.info(f"ip: {ip}")
                     if self._enqueue_message(heartbeat_msg, ip, conn):
-                        logging.info(f"mensaje de latido a {ip} encolado")
+                        logging.debug(f"Heartbeat encolado para {ip}")
 
                 time.sleep(10)
             
@@ -370,23 +359,25 @@ class ServiceDiscoverer:
     def receive_heartbeat(self, message, sender_id, node_type, timestamp, data):
         '''Actualiza el ultimo latido para el control de latidos'''
         self.control_de_latidos[sender_id] = datetime.now()
-        logging.info(f"latido de {sender_id} recibido con exito")
+        logging.debug(f"Heartbeat recibido de {sender_id}")
 
     def handle_heartbeat(self, node_ip, timeout=15):
         '''Hilo encargado de verificar que el nodo node_ip este dando latidos'''
         while(True):
-            #logging.info(f"Entrando al ciclo de handle_heartbeat y durmiendo proceso por {timeout} segundos ...")
             time.sleep(timeout)
-            #logging.info("Saliendo del suenio del proceso ...")
-            #logging.info(f"{self.control_de_latidos}")
-            dif = abs((datetime.now() - self.control_de_latidos[node_ip]).total_seconds())
-            #logging.info(f"Diferencia de {dif} segundos")
-            if dif > 35:
-                logging.error(f"El nodo {node_ip} no responde, cerrando socket...")
-                del(self.conexiones_activas[node_ip])
+            if node_ip not in self.control_de_latidos:
+                logging.debug(f"Nodo {node_ip} ya no está en control de latidos, finalizando monitor")
                 break
             
-            #logging.info(f"Diferencia de {dif}\nEl nodo esta activo, continuando ciclo ...")
+            dif = abs((datetime.now() - self.control_de_latidos[node_ip]).total_seconds())
+            logging.debug(f"Heartbeat check para {node_ip}: {dif:.1f}s desde último latido")
+            
+            if dif > 35:
+                logging.warning(f"Nodo {node_ip} no responde (timeout de {dif:.1f}s). Eliminando conexión...")
+                self.conexiones_activas[node_ip].close()
+                break
+            else:
+                logging.debug(f"Nodo {node_ip} activo ({dif:.1f}s)")
 
 
     #===================funcionalidades del nodo====================
@@ -410,20 +401,19 @@ class ServiceDiscoverer:
         if self.lider == None:
             if len(self.conexiones_activas) == 0:
                 self.lider = self.ip
-                logging.info("Asignandose a si mismo como lider")
-                logging.info(f"lider actual: {self.lider}")
+                logging.info(f"🔶 Autoproclámandose como líder (sin otros nodos): {self.lider}")
             
             dif = abs((datetime.now() - self.control_de_latidos[self.ip]).total_seconds())
             if dif > 15:
                 ips_actuales = list(self.conexiones_activas.keys())
                 ips_actuales.append(self.ip)
                 self.lider = comparar_lista_ips(ips_actuales)
-                #self.lider = self.ip
-                logging.info(f"asignando como lider al de mayor ip de todos los nodos {self.node_type}: {self.lider}")
-                logging.info("enviando lider actual al resto de los nodos ...")
+                logging.info(f"🔶 Líder elegido por IP mayor: {self.lider} de {len(ips_actuales)} nodos")
+                logging.debug("Notificando líder al resto de nodos...")
                 self.enviar_lider_actual()
             
             else:
+                logging.debug("Consultando por líder a nodos conectados...")
                 lider_query_message = MessageProtocol.create_message(
                     msg_type=MessageProtocol.MESSAGE_TYPES['LEADER_QUERY'],
                     sender_id=self.ip,
@@ -434,7 +424,7 @@ class ServiceDiscoverer:
                 conexiones_act_copia = self.conexiones_activas.copy()
                 for ip, conn in conexiones_act_copia.items():
                     if self._enqueue_message(lider_query_message, ip, conn):
-                        logging.info(f"mensaje de lider_query a {ip} encolado")
+                        logging.debug(f"Leader query encolado para {ip}")
 
     def recibir_respuesta_de_lider_query(self, message, sender_id, node_type, timestamp, data):
         '''proceso encargado de asignar el lider, o actualizar el lider'''
@@ -442,17 +432,16 @@ class ServiceDiscoverer:
             leader = data.get('leader')
             if self.lider == None:
                 self.lider = leader
-                logging.info(f"recibiendo respuesta de lider_response, asignando como lider a: {leader}")
+                logging.info(f"Líder asignado desde respuesta: {leader}")
             
             elif self.lider != leader:
-                logging.info(f"lider antes {self.lider}, lider recibido en response: {leader}")
+                logging.warning(f"Conflicto de líder detectado: local={self.lider}, remoto={leader}")
                 self.lider = comparar_lista_ips([self.lider, leader])
-                logging.info(f"lider despues de comparar: {self.lider}")
-                #enviar lider a todos los analogos ya que hay discordancia en quien es el lider
-                logging.info("enviando lider actual al resto de los nodos")
+                logging.info(f"Líder resuelto: {self.lider}")
+                logging.debug("Notificando líder resuelto a todos los nodos")
                 self.enviar_lider_actual()
         except Exception as e:
-            logging.error(f"error recibiendo respuesta de lider_query: {e}")
+            logging.error(f"Error procesando respuesta de leader_query: {e}")
 
     def enviar_lider_actual(self, message=None, sender_id=None, node_type=None, timestamp=None, data=None):
         '''proceso encargado a enviar el lider actual, ya sea para responder al mensaje leader_query o desde otro metodo'''
@@ -471,15 +460,15 @@ class ServiceDiscoverer:
             try:
                 conn:socket.socket = self.conexiones_activas[sender_id]
                 self._enqueue_message(leader_message, sender_id, conn)
-                logging.info(f"Mensaje de lider a {sender_id} encolado")
+                logging.debug(f"Respuesta de líder encolada para {sender_id}")
             
             except Exception as e:
-                logging.error(f"Error al encolar mensaje de lider: {e}")
+                logging.error(f"Error encolando respuesta de líder a {sender_id}: {e}")
 
         else:
+            logging.debug(f"Broadcasting líder {self.lider} a {len(self.conexiones_activas)} nodos")
             for ip, conn in self.conexiones_activas.items():
                 self._enqueue_message(leader_message, ip, conn)
-                logging.info(f"mensaje de lider a {ip} encolado")
 
 
     #=======================eleccion de lider=======================
@@ -497,8 +486,7 @@ class ServiceDiscoverer:
         threading.Thread(target=self.verificar_conec_de_lider, daemon=True).start()
 
         while(True):
-            logging.info('entrando al ciclo principal')
-            logging.info(f"lider actual: {self.lider}")
+            logging.info(f"Estado: Líder={self.lider}, Conexiones={len(self.conexiones_activas)}")
             time.sleep(20)
 
 

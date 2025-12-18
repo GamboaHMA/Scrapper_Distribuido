@@ -102,6 +102,13 @@ class DatabaseNode:
         # hilo de envio
         self.send_thread = None
         self.status_lock = threading.Lock()
+        #base de datos
+        self.db_conn = None
+        self.db_cursor = None
+        self.logs_conn = None
+        self.logs_cursor = None
+        
+        
 
     #=========================Escucha=========================
 
@@ -288,6 +295,7 @@ class DatabaseNode:
             try:
                 # esperar mensaje con timeout para poder verificar stop_event
                 message, conn = self.message_queue.get(timeout=1.0)
+                ip, port = conn.getsockname()
 
                 if message is None:
                     logging.info('message is none')
@@ -302,8 +310,9 @@ class DatabaseNode:
                     conn.send(message)
                     logging.info('mensaje enviado')
 
+
                 except Exception as e:
-                    logging.error(f"Error enviando mensaje: {e}")
+                    logging.error(f"Error enviando mensaje: a {ip}, {port} {e}")
                     
                     if not self.stop_event.is_set():
                         self.message_queue.put(message)
@@ -377,6 +386,7 @@ class DatabaseNode:
             #logging.info(f"Diferencia de {dif} segundos")
             if dif > 35:
                 logging.error(f"El nodo {node_ip} no responde, cerrando socket...")
+                self.conexiones_activas[node_ip].close()
                 del(self.conexiones_activas[node_ip])
                 break
             
