@@ -19,15 +19,19 @@ class MessageProtocol:
         'DISCOVERY': 'discovery',
         'LEADER_QUERY': 'leader_query',
         'LEADER_RESPONSE': 'leader_response',
-        'LEADER_ANNOUNCE': 'leader_announce',
+        'HEARTBEAT_RESPONSE': 'heartbeat_response',
+        'HEARTBEAT': 'heartbeat',
+        'URL_QUERY': 'url_query',  # en el data viene 'url': url
+        'URL_QUERY_LEADER': 'url_query_leader',
+        'URL_QUERY_RESPONSE': 'url_query_response',
+        'TASK_RESULT': 'task_result',
         'ELECTION': 'election',
         'ANSWER': 'answer',
         'COORDINATOR': 'coordinator',
-        'HEARTBEAT': 'heartbeat',
-        'HEARTBEAT_RESPONSE': 'heartbeat_response',
         'NODE_LIST': 'node_list',
         'JOIN_NETWORK': 'join_network',
-        'LEAVE_NETWORK': 'leave_network'
+        'LEAVE_NETWORK': 'leave_network',
+        'LEADER_ANNOUNCE': 'leader_announce'
     }
 
     @staticmethod
@@ -132,7 +136,7 @@ class DatabaseNode:
                 CREATE TABLE IF NOT EXISTS urls (
                     url_id INTEGER PRIMARY KEY,
                     url TEXT UNIQUE NOT NULL,
-                    firstseen DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    firstseen DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
             '''
             )
@@ -200,6 +204,119 @@ class DatabaseNode:
         except Exception as e:
             logging.error(f"Error inicilizando la base de datos: {e}")
 
+    def leader_url_query(self, message, sender_id, node_type, timestamp, data):
+        '''Metodo que ejecutara el nodo cuando es lider, revisa en el log de las urls, si esta toma una base
+           de datos aleatoria de todas las que tienen la info y les pide el content de la url, en caso de que 
+           no este en la tabla de logs, entonces devuelve False'''
+        
+        url = data.get('url')
+
+        self.db_cursor.execute('''
+            SELECT url_id FROM urls WHERE url = ?;
+        '''
+        ,(url))
+
+        url_id = self.db_cursor.fetchone()[0]
+
+        self.db_cursor.execute('''
+            SELECT d.database_id
+            FROM url_db_log udl
+            JOIN databases d ON udl.database_id = d.database
+            WHERE udl.url_id = ?
+            ORDER BY d.database_id
+        '''
+        ,(url_id))
+
+        databases_ips = self.db_cursor.fetchall()
+
+        if len(databases_ips) != 0:
+            for database_ip in databases_ips:
+                with self.status_lock:
+                    if database_ip in self.conexiones_activas.keys():
+                        url_query_message = MessageProtocol.create_message(
+                            msg_type=MessageProtocol.MESSAGE_TYPES['URL_QUERY'],
+                            sender_id=self.ip,
+                            node_type=self.node_type,
+                            data={'id_to_send':sender_id, 'url': url}
+                        )
+                        conn = self.conexiones_activas[database_ip]
+                        self._enqueue_message(url_query_message, database_ip, conn)
+                        break
+                    
+        else:
+            # mandar mensaje de que no hay registro al que consulto
+            url_query_response = MessageProtocol.create_message(
+                msg_type=MessageProtocol.MESSAGE_TYPES['URL_QUERY_RESPONSE'],
+                sender_id=self.ip,
+                node_type=self.node_type,
+                timestamp=datetime.now(),
+                data={'response':False}
+            )
+            try:
+                conn = self.conexiones_activas[sender_id]
+                self._enqueue_message(url_query_response, sender_id, conn)
+            except Exception as e:
+                logging.error(f"fallo al acceder al socket de {sender_id} con {self.ip}: {e}")
+
+    def no_leader_url_query(self, message, sender_id, node_type, timestamp, data):
+        '''Metodo que ejecutara el nodo cuando no es lider, revisa en la base de datos la url, y devuelve el contenido'''
+        url = data.get('url')
+        id_to_send = data.get('id_to_send')
+
+        self.db_cursor.execute('''
+            SELECT url_id
+            FROM urls 
+            WHERE url = ?
+        '''
+        ,(url))
+
+        url_id = self.db_cursor.fetchall()
+
+        if len(url_id) == 0:
+            logging.error(f"url: {url} no se encuentra en la tabla urls de nodo: {self.ip}")
+            return
+        else:
+            url_id = url_id[0] 
+
+        self.db_cursor.execute('''
+            SELECT content
+            FROM url_content
+            WHERE url_id = ?
+        '''
+        ,(url_id))
+
+        content = self.db_cursor.fetchall()
+
+        if len(content) == 0:
+            logging.error(f"url_id: {url_id} no se encuentra en la tabla url_content del nodo: {self.ip}")
+            return
+        else:
+            content = content[0]
+        
+        #crear mensaje de respuesta
+        content_message = MessageProtocol.create_message(
+            msg_type=MessageProtocol.MESSAGE_TYPES['URL_QUERY_RESPONSE'],
+            sender_id=self.ip,
+            node_type=self.node_type,
+            data={'response':True, 'content':content}
+        )
+
+        # hacer un socket temporal para mandar el mensaje
+        try:
+            conn = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            conn.settimeout(30)
+            conn.connect((id_to_send, self.port))
+
+            if self._enqueue_message(content_message, id_to_send, conn):
+                logging.info(f"mensaje de url_query_response a {id_to_send} encolado")
+        
+        except Exception as e:
+            logging.error(f"error al enviar mensaje de tipo url_query_response a {id_to_send}: {e}")
+            
+    def recive_task_result(self, message, sender_id, node_type, timestamp, data):
+        '''Recibe lo escrapeado de la url directo de un nodo scrapper, y lo inserta
+           en la base de datos'''
+            
 
 
     #========================database=========================
@@ -275,6 +392,9 @@ class DatabaseNode:
             MessageProtocol.MESSAGE_TYPES['HEARTBEAT']: self.receive_heartbeat,
             MessageProtocol.MESSAGE_TYPES['LEADER_QUERY']: self.enviar_lider_actual,
             MessageProtocol.MESSAGE_TYPES['LEADER_RESPONSE']: self.recibir_respuesta_de_lider_query,
+            MessageProtocol.MESSAGE_TYPES['URL_QUERY_LEADER']: self.leader_url_query,
+            MessageProtocol.MESSAGE_TYPES['URL_QUERY']: self.no_leader_url_query,
+            MessageProtocol.MESSAGE_TYPES['TASK_RESULT']: self.recive_task_result,
             #MessageProtocol.MESSAGE_TYPES['ELECTION']: self.handle_election,
             #MessageProtocol.MESSAGE_TYPES['ANSWER']: self.handle_answer,
             #MessageProtocol.MESSAGE_TYPES['COORDINATOR']: self.handle_coordinator,
@@ -392,6 +512,8 @@ class DatabaseNode:
                 # esperar mensaje con timeout para poder verificar stop_event
                 message, conn = self.message_queue.get(timeout=1.0)
                 ip, port = conn.getsockname()
+                peer_ip, peer_port = conn.getpeername()
+                msg_type = message.get('type')
 
                 if message is None:
                     logging.info('message is none')
@@ -404,7 +526,7 @@ class DatabaseNode:
                     
                     # enviar mensaje completo
                     conn.send(message)
-                    logging.info('mensaje enviado')
+                    logging.info(f"mensaje enviado a {peer_ip} de tipo {msg_type}")
 
 
                 except Exception as e:
