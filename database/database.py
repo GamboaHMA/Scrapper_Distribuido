@@ -237,6 +237,7 @@ class DatabaseNode:
                             msg_type=MessageProtocol.MESSAGE_TYPES['URL_QUERY'],
                             sender_id=self.ip,
                             node_type=self.node_type,
+                            timestamp=datetime.now(),
                             data={'id_to_send':sender_id, 'url': url}
                         )
                         conn = self.conexiones_activas[database_ip]
@@ -314,8 +315,64 @@ class DatabaseNode:
             logging.error(f"error al enviar mensaje de tipo url_query_response a {id_to_send}: {e}")
             
     def recive_task_result(self, message, sender_id, node_type, timestamp, data):
-        '''Recibe lo escrapeado de la url directo de un nodo scrapper, y lo inserta
-           en la base de datos'''
+        '''Recibe lo escrapeado de la url directo de un nodo scrapper, y le manda la info
+           a tres de las base de datos conectadas, para garantizar la replicabilidad de 3,
+           el que recibe el mensaje es el lider'''
+        
+        result = data.get('result')
+        url = result.get('url')
+        content = result.get('content')
+        completed_at = data.get('completed_at')
+
+        message_to_no_leaders = MessageProtocol.create_message(
+            msg_type=MessageProtocol.MESSAGE_TYPES['TASK_RESULT_NO_LEADER'],
+            sender_id=sender_id,
+            node_type=node_type,
+            timestamp=datetime.now().isoformat(),
+            data={'url': url, 'content': content, 'completed_at': completed_at}
+        )
+
+        # enviar a tres bases de datos aleatorias conectadas
+        databases_conectadas = list(self.conexiones_activas.keys())
+        random.shuffle(databases_conectadas)
+        databases_seleccionadas = databases_conectadas[:3] # no importa si son menos de tres, se envian a las que haya
+
+        for database_ip in databases_seleccionadas:
+            conn = self.conexiones_activas[database_ip]
+            self._enqueue_message(message_to_no_leaders, database_ip, conn)
+            logging.info(f"mensaje de task_result_no_leader a {database_ip} encolado")
+        
+    def recive_task_result_no_leader(self, message, sender_id, node_type, timestamp, data):
+        '''Recibe el resultado del lider y lo almacena en su base de datos'''
+        url = data.get('url')
+        content = data.get('content')
+        completed_at = data.get('completed_at')
+
+        try:
+            # insertar url en tabla urls
+            self.db_cursor.execute('''
+                INSERT OR IGNORE INTO urls (url) VALUES (?);
+            ''', (url,))
+            self.db_conn.commit()
+
+            # obtener url_id
+            self.db_cursor.execute('''
+                SELECT url_id FROM urls WHERE url = ?;
+            ''', (url,))
+            url_id = self.db_cursor.fetchone()[0]
+
+            # insertar contenido en tabla url_content
+            self.db_cursor.execute('''
+                INSERT OR REPLACE INTO url_content (url_id, content, scrapped_at)
+                VALUES (?, ?, ?);
+            ''', (url_id, content, completed_at))
+            self.db_conn.commit()
+
+            logging.info(f"Contenido de URL {url} almacenado correctamente en la base de datos.")
+        
+        except Exception as e:
+            logging.error(f"Error almacenando contenido de URL {url}: {e}")
+        
             
 
 
