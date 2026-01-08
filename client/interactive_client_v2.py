@@ -38,19 +38,22 @@ class InteractiveClient:
         self.router_host = router_host
         self.router_port = router_port
         self.router_ip = None
-        self.socket = None
         self.running = True
-        self.connected = False
         
-        # Cola de mensajes recibidos
-        self.message_queue = Queue()
+        # Conexión persistente con el router
+        self.router_socket = None
+        self.socket_lock = threading.Lock()
+        
+        # Cliente ID único
+        self.client_id = f"client-{uuid.uuid4().hex[:8]}"
+        
+        # Threads
+        self.receive_thread = None
+        self.heartbeat_thread = None
         
         # Tracking de peticiones pendientes
         self.pending_requests = {}  # {task_id: {'url': url, 'timestamp': datetime}}
         self.completed_requests = {}  # {task_id: {'result': result, 'timestamp': datetime}}
-        
-        # Thread para recibir mensajes
-        self.receive_thread = None
         
     def log(self, message, level="INFO"):
         """Log con color"""
@@ -176,49 +179,76 @@ class InteractiveClient:
         return None
     
     def connect(self):
-        """Conecta al Router"""
+        """Descubre el Router Jefe y establece conexión persistente"""
         if not self.router_ip:
             if not self.resolve_router():
                 return False
         
+        self.log(f"✓ Router Jefe identificado: {self.router_ip}:{self.router_port}", "SUCCESS")
+        
         try:
-            self.log(f"📡 Conectando al Router en {self.router_ip}:{self.router_port}...")
+            # Crear socket persistente
+            self.router_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.router_socket.connect((self.router_ip, self.router_port))
+            self.log(f"✓ Conexión establecida con Router", "SUCCESS")
             
-            self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.socket.settimeout(10)
-            self.socket.connect((self.router_ip, self.router_port))
-            self.socket.settimeout(None)  # Sin timeout después de conectar
+            # Enviar mensaje de identificación como conexión persistente
+            identification_msg = {
+                'type': MessageProtocol.MESSAGE_TYPES['IDENTIFICATION'],
+                'sender_id': self.client_id,
+                'node_type': 'client',  # A nivel raíz para que Node lo detecte
+                'timestamp': datetime.now().isoformat(),
+                'data': {
+                    'is_temporary': False,
+                    'is_boss': False,
+                    'port': 0  # Cliente no acepta conexiones entrantes
+                }
+            }
             
-            self.connected = True
-            self.log("✓ Conexión establecida con el Router", "SUCCESS")
+            with self.socket_lock:
+                msg_bytes = json.dumps(identification_msg).encode()
+                self.router_socket.send(len(msg_bytes).to_bytes(2, 'big'))
+                self.router_socket.send(msg_bytes)
             
-            # Iniciar thread de recepción
-            self.receive_thread = threading.Thread(
-                target=self._receive_messages,
-                daemon=True
-            )
+            self.log(f"✓ Identificación enviada como '{self.client_id}'", "SUCCESS")
+            
+            # Iniciar threads de recepción y heartbeat
+            self.receive_thread = threading.Thread(target=self._receive_messages, daemon=True)
             self.receive_thread.start()
+            
+            self.heartbeat_thread = threading.Thread(target=self._send_heartbeats, daemon=True)
+            self.heartbeat_thread.start()
             
             return True
             
-        except socket.timeout:
-            self.log("Timeout conectando al Router", "ERROR")
-            return False
         except Exception as e:
-            self.log(f"Error conectando: {e}", "ERROR")
+            self.log(f"✗ Error estableciendo conexión persistente: {e}", "ERROR")
+            if self.router_socket:
+                try:
+                    self.router_socket.close()
+                except:
+                    pass
+                self.router_socket = None
             return False
     
     def _receive_messages(self):
         """Thread que recibe mensajes del Router"""
         self.log("📥 Iniciando recepción de mensajes...")
         
-        while self.running and self.connected:
+        while self.running and self.router_socket:
             try:
                 # Leer longitud del mensaje (2 bytes)
-                length_bytes = self.socket.recv(2)
+                with self.socket_lock:
+                    if not self.router_socket:
+                        break
+                    self.router_socket.settimeout(1.0)
+                    try:
+                        length_bytes = self.router_socket.recv(2)
+                    except socket.timeout:
+                        continue
+                
                 if not length_bytes:
                     self.log("Conexión cerrada por el Router", "WARNING")
-                    self.connected = False
                     break
                 
                 length = int.from_bytes(length_bytes, 'big')
@@ -226,7 +256,10 @@ class InteractiveClient:
                 # Leer mensaje completo
                 message_bytes = b''
                 while len(message_bytes) < length:
-                    chunk = self.socket.recv(length - len(message_bytes))
+                    with self.socket_lock:
+                        if not self.router_socket:
+                            break
+                        chunk = self.router_socket.recv(length - len(message_bytes))
                     if not chunk:
                         break
                     message_bytes += chunk
@@ -247,6 +280,40 @@ class InteractiveClient:
                 break
         
         self.log("📥 Recepción de mensajes finalizada", "INFO")
+    
+    def _send_heartbeats(self):
+        """Thread que envía heartbeats periódicos al Router"""
+        self.log("💓 Iniciando envío de heartbeats...")
+        
+        while self.running and self.router_socket:
+            try:
+                time.sleep(5)  # Heartbeat cada 5 segundos
+                
+                if not self.router_socket:
+                    break
+                
+                # Crear mensaje de heartbeat
+                heartbeat_msg = {
+                    'type': MessageProtocol.MESSAGE_TYPES['HEARTBEAT'],
+                    'sender_id': self.client_id,
+                    'timestamp': datetime.now().isoformat(),
+                    'data': {}
+                }
+                
+                # Enviar heartbeat
+                with self.socket_lock:
+                    if not self.router_socket:
+                        break
+                    msg_bytes = json.dumps(heartbeat_msg).encode()
+                    self.router_socket.send(len(msg_bytes).to_bytes(2, 'big'))
+                    self.router_socket.send(msg_bytes)
+                
+            except Exception as e:
+                if self.running:
+                    self.log(f"Error enviando heartbeat: {e}", "ERROR")
+                break
+        
+        self.log("💓 Envío de heartbeats finalizado", "INFO")
     
     def _handle_message(self, message):
         """Maneja mensajes recibidos del Router"""
@@ -309,7 +376,7 @@ class InteractiveClient:
     
     def send_scrape_request(self, url):
         """Envía petición de scrapping"""
-        if not self.connected:
+        if not self.router_socket:
             self.log("No conectado al Router", "ERROR")
             return None
         
@@ -317,7 +384,7 @@ class InteractiveClient:
         
         message = {
             'type': MessageProtocol.MESSAGE_TYPES['CLIENT_REQUEST'],
-            'sender_id': 'interactive-client',
+            'sender_id': self.client_id,
             'timestamp': datetime.now().isoformat(),
             'data': {
                 'task_id': task_id,
@@ -326,9 +393,10 @@ class InteractiveClient:
         }
         
         try:
-            message_bytes = json.dumps(message).encode()
-            self.socket.send(len(message_bytes).to_bytes(2, 'big'))
-            self.socket.send(message_bytes)
+            with self.socket_lock:
+                message_bytes = json.dumps(message).encode()
+                self.router_socket.send(len(message_bytes).to_bytes(2, 'big'))
+                self.router_socket.send(message_bytes)
             
             self.pending_requests[task_id] = {
                 'url': url,
@@ -345,21 +413,22 @@ class InteractiveClient:
     
     def send_status_request(self):
         """Solicita estado del sistema"""
-        if not self.connected:
+        if not self.router_socket:
             self.log("No conectado al Router", "ERROR")
             return False
         
         message = {
             'type': MessageProtocol.MESSAGE_TYPES['STATUS_REQUEST'],
-            'sender_id': 'interactive-client',
+            'sender_id': self.client_id,
             'timestamp': datetime.now().isoformat(),
             'data': {}
         }
         
         try:
-            message_bytes = json.dumps(message).encode()
-            self.socket.send(len(message_bytes).to_bytes(2, 'big'))
-            self.socket.send(message_bytes)
+            with self.socket_lock:
+                message_bytes = json.dumps(message).encode()
+                self.router_socket.send(len(message_bytes).to_bytes(2, 'big'))
+                self.router_socket.send(message_bytes)
             
             self.log("📤 Solicitando estado del sistema...", "INFO")
             return True
@@ -482,11 +551,23 @@ class InteractiveClient:
     def cleanup(self):
         """Limpia recursos"""
         self.running = False
-        if self.socket:
+        
+        # Cerrar socket
+        if self.router_socket:
             try:
-                self.socket.close()
+                with self.socket_lock:
+                    self.router_socket.close()
+                    self.router_socket = None
             except:
                 pass
+        
+        # Esperar threads
+        if self.receive_thread and self.receive_thread.is_alive():
+            self.receive_thread.join(timeout=2)
+        
+        if self.heartbeat_thread and self.heartbeat_thread.is_alive():
+            self.heartbeat_thread.join(timeout=2)
+        
         self.log("Cliente cerrado", "INFO")
 
 

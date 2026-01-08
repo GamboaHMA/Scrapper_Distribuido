@@ -697,8 +697,21 @@ class Node:
         
         # Verificar si ya existe
         if client_node_type in self.bosses_connections:
-            logging.warning(f"Cliente externo {client_node_type} ya existe")
-            return True
+            existing_conn = self.bosses_connections[client_node_type]
+            
+            # Si es la misma IP y la conexión está activa, no hacer nada
+            if existing_conn.ip == client_ip and existing_conn.is_connected():
+                logging.warning(f"Cliente externo {client_node_type} {client_ip} ya existe y está conectado")
+                if existing_socket:
+                    existing_socket.close()
+                return True
+            else:
+                # La IP cambió o la conexión está muerta, reemplazar
+                logging.info(f"Reemplazando cliente externo {client_node_type}: {existing_conn.ip} → {client_ip}")
+                try:
+                    existing_conn.disconnect()
+                except:
+                    pass
         
         # Crear NodeConnection hacia el cliente (aunque sea el cliente quien inició)
         conn = NodeConnection(

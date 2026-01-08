@@ -40,21 +40,24 @@ class BossProfile:
     def set_connection(self, connection):
         """
         Establece la conexión con el jefe y marca como disponible.
+        NOTA: Este método NO es thread-safe. El llamador debe adquirir self.lock antes de llamarlo.
         
         Args:
             connection: NodeConnection con el jefe
         """
-        with self.lock:
-            self.connection = connection
-            self.available = True
+        import logging
+        logging.debug(f"BossProfile.set_connection: Estableciendo conexión para {self.node_type}...")
+        self.connection = connection
+        self.available = True
+        logging.debug(f"BossProfile.set_connection: Conexión establecida para {self.node_type}, available={self.available}")
     
     def clear_connection(self):
         """
         Limpia la conexión con el jefe y marca como no disponible.
+        NOTA: Este método NO es thread-safe. El llamador debe adquirir self.lock antes de llamarlo.
         """
-        with self.lock:
-            self.connection = None
-            self.available = False
+        self.connection = None
+        self.available = False
     
     def get_connection(self):
         """
