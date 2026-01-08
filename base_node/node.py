@@ -1202,7 +1202,7 @@ class Node:
             
             message_str = message_bytes.decode('utf-8')
             message = json.loads(message_str)
-            #logging.info(f"message: {message}")
+            logging.info(f"message: {message}")
             #logging.info(f"type: {type(message)}")
             msg_type = message.get('type')
             

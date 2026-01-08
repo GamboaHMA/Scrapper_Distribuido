@@ -127,22 +127,87 @@ class RouterNode(Node):
             MessageProtocol.MESSAGE_TYPES['CLIENT_REQUEST'],
             self._handle_client_request
         )
-        
+
+
         # Handlers para respuestas de BD y Scrapper (conexión persistente)
         # self.persistent_message_handler['bd_query_response'] = self._handle_bd_response
         self.add_persistent_message_handler(
             MessageProtocol.MESSAGE_TYPES['BD_QUERY_RESPONSE'],
             self._handle_bd_response
         )
+        self.add_temporary_message_handler(
+            MessageProtocol.MESSAGE_TYPES['GET_ROUTER_LEADER'],
+            self._get_leader
+        )
         # self.persistent_message_handler['scrapper_result'] = self.
         self.add_persistent_message_handler(
             MessageProtocol.MESSAGE_TYPES['SCRAPPER_RESULT'],
             self._handle_scrapper_result
         )
-        
+
         logging.debug("Handlers del router registrados")
+
+    def _get_leader(self, sock, client_ip, message):
+        """Responde con la información del líder del router (sí mismo)"""
+
+        data = message.get('data')
+        client_ip = message.get('sender_id')
+        client_port = data.get('port')
+
+        if self.boss_connection is None:
+            logging.warning("No hay líder Router disponible para responder")
+            return
+        
+        else:
+            response = self._create_message(
+                MessageProtocol.MESSAGE_TYPES['LEADER_RESPONSE'],
+                {
+                    'leader_ip': self.boss_connection.ip,
+                    'leader_port': self.port,
+                    'is_boss': self.i_am_boss
+                }
+            )
+
+            try:
+                response_bytes = response.encode()
+                length = len(response_bytes).to_bytes(2, 'big')
+                sock.sendall(length)
+                sock.sendall(response_bytes)
+                logging.info(f"Enviada información del líder Router a {client_ip}:{client_port}")
+            except sock.timeout as e:
+                logging.error(f"Timeout enviando líder al cliente {client_ip}:{client_port}: {e}")
+            except Exception as e:
+                logging.error(f"Error enviando líder al cliente {client_ip}:{client_port}: {e}")
     
-    def _handle_client_request(self, sock, client_ip, message):
+    def _handle_get_subordinates(self, node_connection, message):
+        """Responde con lista de subordinados en cache"""
+
+        subordinates_info = {}
+    
+        # Router subordinados (mismo tipo)
+        for ip, info in self.nodes_cache.get('router', {}).items():
+            if info['is_boss'] == False:  # Solo subordinados
+                subordinates_info[ip] = info
+    
+        # Jefes externos (BD, Scrapper)
+        for node_type, info in self.external_bosses_cache.items():
+            subordinates_info[f"{node_type}_boss"] = {
+                'ip': info['ip'],
+                'port': info['port'],
+                'type': node_type,
+                'is_boss': True
+            }
+    
+        response = self._create_message(
+            MessageProtocol.MESSAGE_TYPES['SUBORDINATES_LIST'],
+            {'subordinates': subordinates_info}
+        )
+        node_connection.send_message(response)
+        logging.info(f"Lista de {len(subordinates_info)} subordinados enviada")
+
+
+
+    def _handle_client_request(self, sock, message):
         """
         Handler para peticiones de clientes (conexión temporal).
         
@@ -153,6 +218,7 @@ class RouterNode(Node):
         """
         data = message.get('data', {})
         task_id = data.get('task_id')
+        client_ip = message.get('sender_id')
         url = data.get('url')
         
         if not task_id or not url:

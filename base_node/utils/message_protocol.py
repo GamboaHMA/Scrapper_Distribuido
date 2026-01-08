@@ -47,7 +47,11 @@ class MessageProtocol:
         'SAVE_DATA': 'save_data',
         'SAVE_DATE_NO_LEADER': 'save_data_no_leader',
         'SAVE_CONFIRMATION': 'save_confirmation',
-        'URL_QUERY': 'url_query'
+        'URL_QUERY': 'url_query',
+
+        # CLIENT COMUNICATION
+        'GET_SUBORDINATES': 'get_subordinates',
+        'P2P_REQUEST': 'p2p_request',
     }
 
     @staticmethod
