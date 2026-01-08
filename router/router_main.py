@@ -144,7 +144,7 @@ class RouterNode(Node):
             self._handle_bd_response
         )
         self.add_persistent_message_handler(
-            MessageProtocol.MESSAGE_TYPES['SCRAPPER_RESULT'],
+            MessageProtocol.MESSAGE_TYPES['TASK_RESULT'],
             self._handle_scrapper_result
         )
         
@@ -311,24 +311,29 @@ class RouterNode(Node):
             # No existe en BD, delegar a Scrapper
             self._delegate_to_scrapper(task_id)
     
-    def _handle_scrapper_result(self, node_connection, data):
+    def _handle_scrapper_result(self, node_connection, message_dict):
         """
         Handler para resultados de scrapping del jefe Scrapper.
+        Envía el resultado al cliente que solicitó la tarea.
         
         Args:
             node_connection: Conexión con el nodo Scrapper
-            data: Datos del resultado
+            message_dict: Mensaje completo del resultado
         """
+        logging.debug(f"_handle_scrapper_result - mensaje recibido: {message_dict}")
+        
+        # Extraer el campo 'data' del mensaje
+        data = message_dict.get('data', {})
         task_id = data.get('task_id')
         result = data.get('result')
         success = data.get('success', False)
         
-        logging.info(f"Resultado de Scrapper para task {task_id}: success={success}")
+        logging.info(f"Resultado de Scrapper recibido para task {task_id}: success={success}")
         
         if success:
             self._respond_to_client(task_id, result)
         else:
-            self._respond_to_client(task_id, {'error': 'Scrapping falló'})
+            self._respond_to_client(task_id, {'error': 'Scrapping falló', 'details': result})
     
     def _handle_status_request_persistent(self, node_connection, data):
         """
@@ -428,15 +433,8 @@ class RouterNode(Node):
         
         scrapper_boss = self.external_bosses['scrapper']
         
-        # Debug: Verificar estado del BossProfile
-        logging.debug(f"Estado Scrapper BossProfile: available={scrapper_boss.available}, connection={scrapper_boss.connection is not None}, connected={scrapper_boss.connection.connected if scrapper_boss.connection else 'N/A'}")
-        
         if not scrapper_boss.is_connected():
             logging.error(f"Scrapper no disponible, no se puede procesar task {task_id}")
-            logging.error(f"  - available: {scrapper_boss.available}")
-            logging.error(f"  - connection exists: {scrapper_boss.connection is not None}")
-            if scrapper_boss.connection:
-                logging.error(f"  - connection.connected: {scrapper_boss.connection.connected}")
             self._respond_to_client(task_id, {'error': 'Servicio de scrapping no disponible'})
             return
         
@@ -551,7 +549,6 @@ class RouterNode(Node):
         boss_profile = self.external_bosses[node_type]
         
         logging.info(f"🔍 Iniciando búsqueda periódica del jefe {node_type}...")
-        logging.info(f"   Estado inicial: is_connected={boss_profile.is_connected()}, available={boss_profile.available}")
         
         while self.running:
             # Si ya estamos conectados, monitorear la conexión
@@ -578,9 +575,7 @@ class RouterNode(Node):
             
             # Búsqueda activa: intentar descubrir nodos
             if not boss_profile.is_connected():
-                logging.debug(f"Intentando descubrir nodos {node_type}...")
                 node_ips = self.discover_nodes(node_type, boss_profile.port)
-                logging.debug(f"Descubiertos {len(node_ips) if node_ips else 0} nodos {node_type}")
                 
                 if node_ips:
                     # Buscar el jefe en la lista
@@ -670,11 +665,9 @@ class RouterNode(Node):
             
             if new_connection.connect():
                 logging.info(f"Conectado con jefe {node_type} en {boss_ip}")
-                logging.debug(f"NodeConnection.connected = {new_connection.connected}")
                 
                 try:
                     # Enviar identificación inicial (NO temporal, es conexión persistente)
-                    logging.debug(f"Creando mensaje de identificación para {node_type}...")
                     identification = self._create_message(
                         MessageProtocol.MESSAGE_TYPES['IDENTIFICATION'],
                         {
@@ -684,23 +677,18 @@ class RouterNode(Node):
                             'is_temporary': False
                         }
                     )
-                    logging.debug(f"Enviando mensaje de identificación a {node_type}...")
                     new_connection.send_message(identification)
-                    logging.debug(f"Mensaje de identificación enviado a {node_type}")
                     
                     # Actualizar perfil
-                    logging.debug(f"Actualizando BossProfile para {node_type}...")
                     boss_profile.set_connection(new_connection)
-                    logging.info(f"✓ BossProfile actualizado: {node_type} disponible={boss_profile.available}, is_connected={boss_profile.is_connected()}")
+                    logging.info(f"✓ Conexión con jefe {node_type} establecida exitosamente")
                     
                     # Iniciar heartbeats
-                    logging.debug(f"Iniciando heartbeats para {node_type}...")
                     threading.Thread(
                         target=self._heartbeat_loop,
                         args=(new_connection,),
                         daemon=True
                     ).start()
-                    logging.debug(f"Thread de heartbeats iniciado para {node_type}")
                 except Exception as e:
                     logging.error(f"Error al configurar conexión con jefe {node_type}: {e}")
                     import traceback

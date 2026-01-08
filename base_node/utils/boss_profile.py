@@ -45,11 +45,8 @@ class BossProfile:
         Args:
             connection: NodeConnection con el jefe
         """
-        import logging
-        logging.debug(f"BossProfile.set_connection: Estableciendo conexión para {self.node_type}...")
         self.connection = connection
         self.available = True
-        logging.debug(f"BossProfile.set_connection: Conexión establecida para {self.node_type}, available={self.available}")
     
     def clear_connection(self):
         """
