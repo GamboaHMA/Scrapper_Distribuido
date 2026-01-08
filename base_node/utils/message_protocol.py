@@ -36,6 +36,8 @@ class MessageProtocol:
         'BD_QUERY': 'bd_query',
         'BD_QUERY_RESPONSE': 'bd_query_response',
         'SCRAPPER_RESULT': 'scrapper_result',
+        'STATUS_REQUEST': 'status_request',
+        'STATUS_RESPONSE': 'status_response',
         
         # REPLICATION (Jefe -> Subordinados)
         'EXTERNAL_BOSSES_INFO': 'external_bosses_info',

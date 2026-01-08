@@ -122,19 +122,22 @@ class RouterNode(Node):
     def _register_router_handlers(self):
         """Registrar handlers para mensajes específicos del router"""
         # Handler para peticiones de clientes (conexión temporal)
-        # self.temporary_message_handler['client_request'] = self._handle_client_request
         self.add_temporary_message_handler(
             MessageProtocol.MESSAGE_TYPES['CLIENT_REQUEST'],
             self._handle_client_request
         )
         
+        # Handler para solicitudes de estado
+        self.add_temporary_message_handler(
+            MessageProtocol.MESSAGE_TYPES['STATUS_REQUEST'],
+            self._handle_status_request
+        )
+        
         # Handlers para respuestas de BD y Scrapper (conexión persistente)
-        # self.persistent_message_handler['bd_query_response'] = self._handle_bd_response
         self.add_persistent_message_handler(
             MessageProtocol.MESSAGE_TYPES['BD_QUERY_RESPONSE'],
             self._handle_bd_response
         )
-        # self.persistent_message_handler['scrapper_result'] = self.
         self.add_persistent_message_handler(
             MessageProtocol.MESSAGE_TYPES['SCRAPPER_RESULT'],
             self._handle_scrapper_result
@@ -213,6 +216,51 @@ class RouterNode(Node):
             self._respond_to_client(task_id, result)
         else:
             self._respond_to_client(task_id, {'error': 'Scrapping falló'})
+    
+    def _handle_status_request(self, sock, client_ip, message):
+        """
+        Handler para solicitudes de estado del sistema.
+        
+        Args:
+            sock: Socket del cliente
+            client_ip: IP del cliente
+            message: Mensaje con la solicitud
+        """
+        logging.info(f"Solicitud de estado recibida de {client_ip}")
+        
+        # Recopilar información del sistema
+        status = {
+            'router': {
+                'ip': self.ip,
+                'is_boss': self.i_am_boss,
+                'bd_connected': self.external_bosses['bd'].is_connected(),
+                'scrapper_connected': self.external_bosses['scrapper'].is_connected(),
+            },
+            'tasks': {
+                'pending': self.task_queue.get_pending_count(),
+                'in_progress': len(self.task_queue.in_progress),
+                'completed': len(self.task_queue.completed)
+            },
+            'timestamp': datetime.now().isoformat()
+        }
+        
+        # Crear respuesta
+        response = self._create_message(
+            MessageProtocol.MESSAGE_TYPES['STATUS_RESPONSE'],
+            status
+        )
+        
+        try:
+            # Enviar respuesta
+            import json
+            response_bytes = json.dumps(response).encode()
+            sock.send(len(response_bytes).to_bytes(2, 'big'))
+            sock.send(response_bytes)
+            logging.info(f"Estado enviado al cliente {client_ip}")
+        except Exception as e:
+            logging.error(f"Error enviando estado al cliente: {e}")
+        finally:
+            sock.close()
     
     def _respond_to_client(self, task_id, result):
         """
