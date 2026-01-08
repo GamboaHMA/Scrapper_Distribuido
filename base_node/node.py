@@ -165,7 +165,7 @@ class Node:
             self.my_boss_profile.set_connection(node_connection)
             logging.info(f"Jefe {sender_node_type} identificado: {node_ip}")
         else:
-            logging.debug(f"Identificación recibida de {sender_node_type} {node_ip} (boss={is_boss})")
+            logging.info(f"Identificación recibida de {sender_node_type} {node_ip} (boss={is_boss})")
     
     def _handle_status_update(self, node_connection, message_dict):
         data = message_dict.get('data', {})
@@ -1040,46 +1040,69 @@ class Node:
         Returns:
             list: Lista de IPs de nodos descubiertos.
         """
-        try:
-            # Resolver el alias que Docker maneja internamente
-            result = socket.getaddrinfo(node_alias, None, socket.AF_INET)
-            
-            # Extraer todas las IPs únicas
-            discovered_ips = []
-            for addr_info in result:
-                ip = addr_info[4][0]  # La IP está en la posición [4][0]
-                if ip not in discovered_ips and ip != self.ip:
-                    discovered_ips.append(ip)
         
-            # Almacenar nodos descubiertos en known_nodes para uso posterior
-            for ip in discovered_ips:
-                if node_alias not in self.nodes_cache:
-                    self.nodes_cache[node_alias] = {}
+        while(True):
+            try:
+                # Resolver el alias que Docker maneja internamente
+                result = socket.getaddrinfo(node_alias, None, socket.AF_INET)
                 
-                # Solo actualizar si no existe o actualizar last_seen
-                if ip not in self.nodes_cache[node_alias]:
-                    self.nodes_cache[node_alias][ip] = {
-                        "port": node_port,
-                        "last_seen": datetime.now(),
-                        "is_boss": False  # Por defecto, no sabemos si es jefe
-                    }
+                # Extraer todas las IPs únicas
+                discovered_ips = []
+                for addr_info in result:
+                    ip = addr_info[4][0]  # La IP está en la posición [4][0]
+                    if ip not in discovered_ips and ip != self.ip:
+                        discovered_ips.append(ip)
+            
+                # Almacenar nodos descubiertos en known_nodes para uso posterior
+                for ip in discovered_ips:
+                    if node_alias not in self.nodes_cache:
+                        self.nodes_cache[node_alias] = {}
+                    
+                    # Solo actualizar si no existe o actualizar last_seen
+                    if ip not in self.nodes_cache[node_alias]:
+                        self.nodes_cache[node_alias][ip] = {
+                            "port": node_port,
+                            "last_seen": datetime.now(),
+                            "is_boss": False  # Por defecto, no sabemos si es jefe
+                        }
+                    else:
+                        # Actualizar last_seen si ya existe
+                        self.nodes_cache[node_alias][ip]["last_seen"] = datetime.now()
+                
+                discovered_count = len([ip for ip in discovered_ips if ip != self.ip])
+                #logging.info(f"Nodos {node_alias} descubiertos: {discovered_count}")
+                #logging.info(f"Mi IP: {self.ip}")
+                #logging.info(f"IPs descubiertas: {[ip for ip in discovered_ips if ip != self.ip]}")
+                
+                #return [ip for ip in discovered_ips if ip != self.ip]
+                discovered_ips = [ip for ip in discovered_ips if ip != self.ip]
+
+                if self.node_type == node_alias and len(discovered_ips) != 0:
+                    logging.info(f"Enviando identificación a todos los nodos {self.node_type}...")
+                    boss_found = self.broadcast_identification(self.node_type)
+
+                    if not boss_found and not self.i_am_boss:
+                        logging.warning("No se encontraron jefes activos, iniciando elecciones")
+                        self.call_elections()
+
+
+                if not discovered_ips and node_alias == self.node_type and not self.boss_connection and not self.i_am_boss:
+                    logging.info(f"No se encontraron otros nodos {self.node_type}. Asumiendo rol de jefe.")
+                    self.i_am_boss = True
+
                 else:
-                    # Actualizar last_seen si ya existe
-                    self.nodes_cache[node_alias][ip]["last_seen"] = datetime.now()
+                    #logging.info(f"Descubiertos {len(discovered_ips)} nodos {self.node_type}: {discovered_ips}")
+                    pass
+
+                
+            except socket.gaierror as e:
+                #logging.error(f"Error consultando DNS de Docker para {node_alias}: {e}")
+                continue
+            except Exception as e:
+                #logging.error(f"Error inesperado en descubrimiento de {node_alias}: {e}")
+                continue
             
-            discovered_count = len([ip for ip in discovered_ips if ip != self.ip])
-            logging.info(f"Nodos {node_alias} descubiertos: {discovered_count}")
-            logging.info(f"Mi IP: {self.ip}")
-            logging.info(f"IPs descubiertas: {[ip for ip in discovered_ips if ip != self.ip]}")
-            
-            return [ip for ip in discovered_ips if ip != self.ip]
-            
-        except socket.gaierror as e:
-            logging.error(f"Error consultando DNS de Docker para {node_alias}: {e}")
-            return []
-        except Exception as e:
-            logging.error(f"Error inesperado en descubrimiento de {node_alias}: {e}")
-            return []
+            time.sleep(10)
     
     def get_discovered_nodes(self, node_type=None):
         """
@@ -1177,7 +1200,10 @@ class Node:
                     break
                 message_bytes += chunk
             
-            message = json.loads(message_bytes.decode())
+            message_str = message_bytes.decode('utf-8')
+            message = json.loads(message_str)
+            #logging.info(f"message: {message}")
+            #logging.info(f"type: {type(message)}")
             msg_type = message.get('type')
             
             # handler para procesar mensaje
@@ -1254,14 +1280,14 @@ class Node:
                     boss_found = True
                 
                 # Crear NUEVA conexión persistente (evita conflicto de sockets)
-                logging.debug(f"Estableciendo conexión persistente con jefe...")
+                logging.debug("Estableciendo conexión persistente con jefe...")
                 time.sleep(0.3)  # Pequeña pausa para que el jefe registre
                 
                 self.connect_to_boss(ip)
                 
                 # El hilo de heartbeat ya se inicia en connect_to_boss()
                 if self.boss_connection and self.boss_connection.is_connected():
-                    logging.info("Conexión con jefe establecida")
+                    logging.info("Conexión con jefe ya establecida")
                 else:
                     logging.error(f"No se pudo establecer conexión persistente con {ip}")
                     boss_found = False
@@ -1438,6 +1464,70 @@ class Node:
         # Iniciar tareas de jefe (si aplica)
         self.start_boss_tasks() # thread?
 
+    def _discover_boss_nodes(self):
+        '''Hilo que buscara continuamente los otros jefes'''
+        
+        logging.info("Soy el jefe, buscando a los otros jefes...")
+        others_roles = list(self.nodes_cache.keys())
+        others_roles = [rol for rol in others_roles if rol != self.node_type]
+        logging.info(f"others_roles: {others_roles}")
+
+        while(True):
+            for rol in others_roles:
+                try:
+                    # Resolver el alias que Docker maneja internamente
+                    result = socket.getaddrinfo(rol, None, socket.AF_INET)
+                    
+                    # Extraer todas las IPs únicas
+                    discovered_ips = []
+                    for addr_info in result:
+                        ip = addr_info[4][0]  # La IP está en la posición [4][0]
+                        if ip not in discovered_ips and ip != self.ip:
+                            discovered_ips.append(ip)
+                
+                    # Almacenar nodos descubiertos en known_nodes para uso posterior
+                    for ip in discovered_ips:
+                        if rol not in self.nodes_cache:
+                            self.nodes_cache[rol] = {}
+                        
+                        # Solo actualizar si no existe o actualizar last_seen
+                        if ip not in self.nodes_cache[rol]:
+                            self.nodes_cache[rol][ip] = {
+                                "port": rol,
+                                "last_seen": datetime.now(),
+                                "is_boss": False  # Por defecto, no sabemos si es jefe
+                            }
+                        else:
+                            # Actualizar last_seen si ya existe
+                            self.nodes_cache[rol][ip]["last_seen"] = datetime.now()
+
+                    logging.info(f"Nodos {rol} descubiertos {len(discovered_ips)}")
+                    logging.info(f"IP descubiertas: {discovered_ips}")
+
+                except socket.gaierror as e:
+                    #logging.error(f"Error consultando DNS de Docker para {rol}: {e}")
+                    continue
+                    
+                except Exception as e:
+                    logging.error(f"Error inesperado en descubrimiento de {rol}: {e}")
+
+            time.sleep(20)
+
+    def _comprobar_mi_jefatura(self):
+        '''Hilo que comprueba cada cirto tiempo si me converti en jefe, en caso de ser afirmativo, 
+        ejecuto una serie de pasos y salgo del metodo, ya que la unica manera de dejar de ser jefe
+        es desconectandose de la red'''
+
+        while(True):
+            if self.i_am_boss:
+                threading.Thread(
+                    target=self._discover_boss_nodes,
+                    daemon=True
+                ).start()
+                break
+            else:
+                time.sleep(1)
+
     def start(self):
         '''Inicia el nodo (escucha, heartbeat, etc.)'''
         
@@ -1446,13 +1536,19 @@ class Node:
         
         # 1. Descubrir otros nodos del mismo node_type
         logging.info(f"Descubriendo nodos {self.node_type} en la red...")
-        discovered_ips = self.discover_nodes(self.node_type, self.port)
+
+        threading.Thread(
+            target=self.discover_nodes,
+            args=(self.node_type, self.port),
+            daemon=True
+        ).start()
+        logging.info("Hilo de descubrimiento de nodos del mismo tipo iniciado")
         
-        if not discovered_ips:
-            logging.info(f"No se encontraron otros nodos {self.node_type}. Asumiendo rol de jefe.")
-            self.i_am_boss = True
-        else:
-            logging.info(f"Descubiertos {len(discovered_ips)} nodos {self.node_type}: {discovered_ips}")
+        #if not discovered_ips:
+        #    logging.info(f"No se encontraron otros nodos {self.node_type}. Asumiendo rol de jefe.")
+        #    self.i_am_boss = True
+        #else:
+        #    logging.info(f"Descubiertos {len(discovered_ips)} nodos {self.node_type}: {discovered_ips}")
         
         # 2. Iniciar socket de escucha
         logging.info("Iniciando socket de escucha...")
@@ -1467,16 +1563,26 @@ class Node:
         )
         self.heartbeat_monitor_thread.start()
         
-        # 4. Broadcast de identificación (todos me registran, solo jefe responde)
-        if discovered_ips:
-            logging.info(f"Enviando identificación a todos los nodos {self.node_type}...")
-            boss_found = self.broadcast_identification(self.node_type)
+        # 4. Broadcast de identificación (todos me registran, solo jefe responde) --- YA SE HACE EN discover_nodes
+        #if discovered_ips:
+        #    logging.info(f"Enviando identificación a todos los nodos {self.node_type}...")
+        #    boss_found = self.broadcast_identification(self.node_type)
             
-            if not boss_found:
-                logging.warning("No se encontró jefe activo. Iniciando elecciones...")
-                self.call_elections()
-        
+        #    if not boss_found:
+        #        logging.warning("No se encontró jefe activo. Iniciando elecciones...")
+        #        self.call_elections()
+
         # 5. Comportamiento según rol
+        # Ya en discover_boss_nodes se busca a los otros jefes, solo para el nodo cuando es jefe
+
+        # hilo de comprobar la jefatura
+        threading.Thread(
+            target=self._comprobar_mi_jefatura,
+            daemon=True
+        ).start()
+
+        time.sleep(1)
+
         if self.i_am_boss:
             logging.info(f"🔶 Soy el JEFE de nodos {self.node_type}")
             # Iniciar hilo de asignación de tareas

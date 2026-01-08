@@ -45,7 +45,9 @@ class MessageProtocol:
         
         # DATABASE COMMUNICATION
         'SAVE_DATA': 'save_data',
-        'SAVE_CONFIRMATION': 'save_confirmation'
+        'SAVE_DATE_NO_LEADER': 'save_data_no_leader',
+        'SAVE_CONFIRMATION': 'save_confirmation',
+        'URL_QUERY': 'url_query'
     }
 
     @staticmethod

@@ -96,7 +96,7 @@ class RouterNode(Node):
     - Responder a clientes
     """
     
-    def __init__(self, scrapper_port=8080, bd_port=7070):
+    def __init__(self, scrapper_port=8080, bd_port=9090):
         """
         Inicializa el nodo Router.
         
@@ -182,6 +182,7 @@ class RouterNode(Node):
             node_connection: Conexión con el nodo BD
             data: Datos de la respuesta
         """
+        data = data.get('data') # acceder a la data de message
         task_id = data.get('task_id')
         found = data.get('found', False)
         result = data.get('result')
