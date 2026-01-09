@@ -12,4 +12,4 @@ ENV ROUTER_PORT=7070
 ENV LOG_LEVEL=INFO
 
 # Punto de entrada
-CMD ["python3", "-u", "/app/client/interactive_client_v2.py"]
+CMD ["python3", "-u", "/app/client/interactive_client.py"]

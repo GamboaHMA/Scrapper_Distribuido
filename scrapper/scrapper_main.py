@@ -160,7 +160,7 @@ class ScrapperNode(Node):
 
         self.external_bosses = {
             'bd': BossProfile('bd', bd_port),
-            'router': BossProfile('bd', router_port)
+            'router': BossProfile('router', router_port)
         }
     
     def _register_scrapper_handlers(self):
@@ -205,44 +205,6 @@ class ScrapperNode(Node):
             # Intentar asignar las tareas devueltas
             self._try_assign_pending_tasks()
         return reassigned
-    
-    def start_boss_tasks(self):
-        """
-        Override: Inicia tareas específicas del jefe scrapper.
-        - Conecta con BD y Router jefes
-        - Inicia hilo de asignación de tareas
-        """
-        if not self.i_am_boss:
-            return
-        
-        logging.info("🔧 Iniciando tareas de jefe scrapper...")
-        
-        # 1. Descubrir y conectar con jefe de BD
-        # logging.info("Buscando jefe de BD...")
-        # bd_ips = self.discover_nodes('bd', self.bd_port)
-        # if bd_ips:
-        #     bd_boss_found = self.broadcast_identification('bd')
-        #     if bd_boss_found:
-        #         logging.info("✓ Conectado a jefe de BD")
-                    
-        #         logging.warning("✗ No se encontró jefe de BD")
-        # else:
-        #     logging.warning("No se encontraron nodos BD en la red")
-        
-        # 2. Descubrir y conectar con jefe de Router
-        # logging.info("Buscando jefe de Router...")
-        # router_ips = self.discover_nodes('router', self.router_port)
-        # if router_ips:
-        #     router_boss_found = self.broadcast_identification('router')
-        #     if router_boss_found:
-        #         logging.info("✓ Conectado a jefe de Router")
-        #     else:
-        #         logging.warning("✗ No se encontró jefe de Router")
-        # else:
-        #     logging.warning("No se encontraron nodos Router en la red")
-        
-        # 3. Iniciar hilo de asignación de tareas
-        self._start_task_assignment_thread()
     
     # ============= HANDLERS ESPECÍFICOS DE SCRAPPER =============
     
@@ -520,11 +482,13 @@ class ScrapperNode(Node):
     
     def _send_result_to_database(self, task_id, result):
         """Envía resultado al jefe de BD"""
-        bd_conn = self.bosses_connections.get('bd')
+        bd_profile = self.external_bosses.get('bd')
         
-        if not bd_conn or not bd_conn.is_connected():
+        if not bd_profile or not bd_profile.is_connected():
             logging.warning(f"No hay conexión con BD para enviar resultado de tarea {task_id}")
             return
+        
+        bd_conn = bd_profile.connection
         
         save_msg = self._create_message(
             MessageProtocol.MESSAGE_TYPES['SAVE_DATA'],
@@ -542,25 +506,28 @@ class ScrapperNode(Node):
     
     def _notify_router_task_completed(self, task_id, result):
         """Notifica al router que una tarea fue completada"""
-        router_conn = self.bosses_connections.get('router')
+        router_profile = self.external_bosses.get('router')
         
-        if not router_conn or not router_conn.is_connected():
+        if not router_profile or not router_profile.is_connected():
             logging.warning(f"No hay conexión con Router para notificar tarea {task_id}")
             return
         
+        router_conn = router_profile.connection
+        
         completion_msg = self._create_message(
-            MessageProtocol.MESSAGE_TYPES['TASK_COMPLETED'],
+            MessageProtocol.MESSAGE_TYPES['TASK_RESULT'],
             {
                 'task_id': task_id,
-                'status': result.get('status', 'unknown'),
+                'result': result,
+                'success': result.get('status') == 'success' if result else False,
                 'timestamp': datetime.now().isoformat()
             }
         )
         
         if router_conn.send_message(completion_msg):
-            logging.info(f"Notificación de tarea completada {task_id} enviada a Router")
+            logging.info(f"Resultado de tarea {task_id} enviado a Router")
         else:
-            logging.error(f"No se pudo notificar al Router sobre tarea {task_id}")
+            logging.error(f"No se pudo enviar resultado de tarea {task_id} al Router")
     
     def _start_task_assignment_thread(self):
         """Inicia hilo de asignación periódica de tareas"""
@@ -594,7 +561,7 @@ class ScrapperNode(Node):
 
     def _connect_to_external_bosses(self):
         """Conecta con los jefes de BD y Router"""
-        logging.info("Conectando con jefes externos (BD y ScrapRouterper)...")
+        logging.info("Conectando con jefes externos (BD y Router)...")
         
         for node_type in self.external_bosses.keys():
             threading.Thread(
@@ -695,49 +662,48 @@ class ScrapperNode(Node):
         """
         boss_profile = self.external_bosses[node_type]
         
-        with boss_profile.lock:
-            # Verificar si ya existe conexión
-            if boss_profile.is_connected():
-                logging.warning(f"Ya existe conexión con jefe {node_type}")
-                return
+        # Verificar si ya existe conexión (is_connected() tiene su propio lock)
+        if boss_profile.is_connected():
+            logging.warning(f"Ya existe conexión con jefe {node_type}")
+            return
+        
+        # Crear nueva conexión
+        new_connection = NodeConnection(
+            node_type,
+            boss_ip,
+            boss_profile.port,
+            on_message_callback=self._handle_message_from_node,
+            sender_node_type=self.node_type,
+            sender_id=self.node_id
+        )
+        
+        if new_connection.connect():
+            logging.info(f"Conectado con jefe {node_type} en {boss_ip}")
             
-            # Crear nueva conexión
-            new_connection = NodeConnection(
-                node_type,
-                boss_ip,
-                boss_profile.port,
-                on_message_callback=self._handle_message_from_node,
-                sender_node_type=self.node_type,
-                sender_id=self.node_id
+            # Enviar identificación inicial (NO temporal, es conexión persistente)
+            identification = self._create_message(
+                MessageProtocol.MESSAGE_TYPES['IDENTIFICATION'],
+                {
+                    'ip': self.ip,
+                    'port': self.port,
+                    'is_boss': self.i_am_boss,
+                    'is_temporary': False
+                }
             )
+            new_connection.send_message(identification)
             
-            if new_connection.connect():
-                logging.info(f"Conectado con jefe {node_type} en {boss_ip}")
-                
-                # Enviar identificación inicial (NO temporal, es conexión persistente)
-                identification = self._create_message(
-                    MessageProtocol.MESSAGE_TYPES['IDENTIFICATION'],
-                    {
-                        'ip': self.ip,
-                        'port': self.port,
-                        'is_boss': self.i_am_boss,
-                        'is_temporary': False
-                    }
-                )
-                new_connection.send_message(identification)
-                
-                # Actualizar perfil
-                boss_profile.set_connection(new_connection)
-                
-                # Iniciar heartbeats
-                threading.Thread(
-                    target=self._heartbeat_loop,
-                    args=(new_connection,),
-                    daemon=True
-                ).start()
-            else:
-                logging.error(f"No se pudo conectar con jefe {node_type} en {boss_ip}")
-                boss_profile.clear_connection()
+            # Actualizar perfil (set_connection ya tiene su propio lock)
+            boss_profile.set_connection(new_connection)
+            
+            # Iniciar heartbeats
+            threading.Thread(
+                target=self._heartbeat_loop,
+                args=(new_connection,),
+                daemon=True
+            ).start()
+        else:
+            logging.error(f"No se pudo conectar con jefe {node_type} en {boss_ip}")
+            boss_profile.clear_connection()
 
     def start_boss_tasks(self):
         """
@@ -748,7 +714,7 @@ class ScrapperNode(Node):
         
         # Conectar con jefes externos
         self._connect_to_external_bosses()
-                
+        self._start_task_assignment_thread()
         logging.info("✓ Jefe Scrapper operativo")
 
 
