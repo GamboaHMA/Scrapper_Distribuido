@@ -52,6 +52,7 @@ class MessageProtocol:
         # CLIENT COMUNICATION
         'GET_SUBORDINATES': 'get_subordinates',
         'P2P_REQUEST': 'p2p_request',
+        'GET_ROUTER_LEADER': 'get_router_leader'
     }
 
     @staticmethod

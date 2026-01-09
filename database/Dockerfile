@@ -19,8 +19,8 @@ ENV PYTHONUNBUFFERED=1
 ENV PYTHONPATH=/app
 ENV LOG_LEVEL=INFO
 
-# Puerto del router
+# Puerto de database 
 EXPOSE 7070
 
-# Comando para ejecutar el router
+# Comando para ejecutar el database
 CMD ["python3", "-m", "database.database"]

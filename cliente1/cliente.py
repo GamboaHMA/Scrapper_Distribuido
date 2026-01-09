@@ -43,13 +43,14 @@ class Client:
     def initial_connect(self):
         """Conecta al router"""
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.socket.timeout(3)
+        #self.sock.settimeout(3)
         try:
             self.sock.connect((self.router_host, self.router_port))
             self.ip, port = self.sock.getsockname()
             peer_ip, peer_port = self.sock.getpeername()
-            self.cache.append(peer_ip, peer_port)
+            self.cache.append((peer_ip, peer_port))
             print(f"✓ Conectado a {self.router_host}:{self.router_port}")
+            print(f"peer_ip: {peer_ip} peer_port: {peer_port}")
         except Exception as e:
             print(f"Error conectando al router en {self.router_host}:{self.router_port}: {e}")
             return
@@ -58,17 +59,46 @@ class Client:
             MessageProtocol.MESSAGE_TYPES['IDENTIFICATION'],
             sender_id=self.ip,
             node_type=self.node_type,
-            data={},
+            data={'is_temporary': True},
             timestamp=datetime.now().isoformat()
         )
 
         try:    
             msg_bytes = ident_message.encode('utf-8')
             length = len(msg_bytes).to_bytes(2, 'big')
-            self.sock.sendall(length)
-            self.sock.sendall(msg_bytes)
+            self.sock.send(length)
+            self.sock.send(msg_bytes)
+            
+            #self.test_mess()
         except Exception as e:
             print(f"Error enviando mensaje de identificación a {peer_ip}: {e}")
+
+        try:
+            lenght_bytes = self.sock.recv(2)
+            if len(lenght_bytes) < 2:
+                print("no response")
+                return
+            msg_lenght = int.from_bytes(lenght_bytes, 'big')
+
+            msg_bytes = b''
+            while lenght_bytes
+
+
+    def test_mess(self):
+        msg = MessageProtocol.create_message(
+            MessageProtocol.MESSAGE_TYPES['IDENTIFICATION'],
+            sender_id=self.ip,
+            node_type=self.node_type,
+            data={},
+            timestamp=datetime.now().isoformat()
+        )
+        try:
+            msg_bytes = msg.encode()
+            lenght = len(msg_bytes).to_bytes(2, 'big')
+            self.sock.send(lenght)
+            self.sock.send(msg_bytes)
+        except Exception as e:
+            print(f"Error enviando mensaje de prueba de {self.sock.getsockname()} a {self.sock.getpeername()}: {e}")
             
         
     def send_subordinates_request(self, cache=False):
@@ -202,6 +232,8 @@ class Client:
                 cmd = input("> ").strip()
                 if cmd.lower() == 'exit':
                     break
+                elif cmd.lower() == 'reconnect':
+                    self.initial_connect()
                 elif cmd.startswith('url '):
                     url = int(cmd[4:].strip())
                     if url:
@@ -209,7 +241,7 @@ class Client:
                     else:
                         print("URL requerida")
                 elif cmd.lower().startswith('subs'):
-
+                    pass
                 else:
                     print("Comando inválido")
                     
