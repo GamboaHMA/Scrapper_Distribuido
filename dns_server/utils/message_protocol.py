@@ -33,8 +33,12 @@ class MessageProtocol:
         
         # DATABASE COMMUNICATION
         'SAVE_DATA': 'save_data',
-        'SAVE_CONFIRMATION': 'save_confirmation'
-    }
+        'SAVE_CONFIRMATION': 'save_confirmation',
+
+        # OTHERS
+        'LEADER_QUERY_TO_OTHER_BOSS': 'leader_query_to_other_boss',
+        'LEADER_RESPONSE_TO_OTHER_BOSS': 'leader_response_to_other_boss',
+    }   
 
     @staticmethod
     def create_message(msg_type, sender_id, node_type, data=None, timestamp=None):

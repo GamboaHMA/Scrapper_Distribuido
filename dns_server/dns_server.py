@@ -39,9 +39,14 @@ def comparar_lista_ips(ips:list):
     
     return mayor_ip
 
-
+NODE_TYPE_DB = 'db'
+NODE_TYPE_SCRAPPER = 'scrapper'
 NODE_TYPE_ROUTER = 'router'
-PORT = 8080
+NODE_TYPE_CLIENT = 'client'
+
+PORT_ROUTER = 8080
+PORT_DB = 7070
+PORT_SCRAPPER = 9090
 
 # Configuración de logging con soporte para LOG_LEVEL
 log_level = os.environ.get('LOG_LEVEL', 'INFO').upper()
@@ -51,7 +56,7 @@ logging.basicConfig(
 )
 
 class ServiceDiscoverer:
-    def __init__(self, port=PORT):
+    def __init__(self, port=PORT_ROUTER):
         self.node_type = NODE_TYPE_ROUTER  # node_type también es el network-alias de Docker
         # self.name = socket.gethostname()
         # logging.debug(f"Hostname: {self.name}")
@@ -60,7 +65,7 @@ class ServiceDiscoverer:
         self.port = port
         self.sock_de_servidor = None
         self.escuchando = False
-        self.conexiones_activas = {}
+        self.conexiones_activas = {}  # key:addr, value:socket   addr=(ip,port)
         self.control_de_latidos:dict[str, datetime] = {}  # key:ip, value:fecha u hora
         self.control_de_latidos[self.ip] = datetime.now()
         self.lider = None
@@ -70,7 +75,10 @@ class ServiceDiscoverer:
         # hilo de envio
         self.sent_thread = None
         self.status_lock = threading.Lock()
-
+        # jefes directamente
+        self.jefe_db = None  # tuple(addr, socket)
+        self.jefe_scrapper = None  # tuple(addr, socket)
+ 
 
     # ============================Escucha===========================
 
@@ -122,9 +130,7 @@ class ServiceDiscoverer:
                     if not message:
                         break
                     try:
-                        message_dict = json.loads(message)
-                        logging.debug(f"Mensaje recibido de {addr[0]}: {message_dict.get('type', 'unknown')}")
-                        self.procesar_mensaje(message_dict, addr[0])
+                        self.procesar_mensaje(message, addr[0])
                     except Exception as e:
                         logging.error(f"Error procesando mensaje de {addr[0]}: {e}")
                 except Exception as e:
@@ -152,8 +158,8 @@ class ServiceDiscoverer:
             MessageProtocol.MESSAGE_TYPES['HEARTBEAT']: self.receive_heartbeat,
             MessageProtocol.MESSAGE_TYPES['LEADER_QUERY']: self.enviar_lider_actual,
             MessageProtocol.MESSAGE_TYPES['LEADER_RESPONSE']: self.recibir_respuesta_de_lider_query,
-            #MessageProtocol.MESSAGE_TYPES['ELECTION']: self.handle_election,
-            #MessageProtocol.MESSAGE_TYPES['ANSWER']: self.handle_answer,
+            MessageProtocol.MESSAGE_TYPES['LEADER_QUERY_TO_OTHER_BOSS']: self.enviar_lider_a_otro_jefe,
+            MessageProtocol.MESSAGE_TYPES['LEADER_RESPONSE_TO_OTHER_BOSS']: self.handle_lider_response_from_other_boss,
             #MessageProtocol.MESSAGE_TYPES['COORDINATOR']: self.handle_coordinator,
             #MessageProtocol.MESSAGE_TYPES['HEARTBEAT_RESPONSE']: self.handle_heartbeat_response,
             #MessageProtocol.MESSAGE_TYPES['JOIN_NETWORK']: self.handle_join_network,
@@ -197,7 +203,7 @@ class ServiceDiscoverer:
                     return message
                 except json.JSONDecodeError as e:
                     logging.error(f"Error al cargar json: {e}") 
-            
+        
 
     # ============================escucha===========================
 
@@ -244,8 +250,10 @@ class ServiceDiscoverer:
                 logging.error(f"Error en descubrimiento de nodos: {e}")
                 time.sleep(intervalo)
 
-    def conectar_a(self, destino):
+    def conectar_a(self, destino, port=None):
         # No conectar a si mismo
+        if not port:
+            port = self.port
         if destino == self.ip:
             logging.debug(f"Evitando conexión a sí mismo ({self.ip})")
             return None
@@ -255,8 +263,8 @@ class ServiceDiscoverer:
             return self.conexiones_activas[destino]
         
         try:
-            sock_cliente = socket.create_connection((destino, self.port), timeout=5)
-            logging.info(f"Conectado exitosamente a {destino}:{self.port}")
+            sock_cliente = socket.create_connection((destino, port), timeout=5)
+            logging.info(f"Conectado exitosamente a {destino}:{port}")
             self.conexiones_activas[destino] = sock_cliente
             self.control_de_latidos[destino] = datetime.now()
             # iniciar hilos de manejo
@@ -271,6 +279,157 @@ class ServiceDiscoverer:
                           
         return None
 
+    def buscar_otros_lideres(self, intervalo=20):
+        '''Metodo para buscar otros lideres en la red'''
+        
+        while self.lider == self.ip:
+            try:
+
+                if self.jefe_db == None:
+                    # Resolver directamente el node_type como network-alias (ej: 'router')
+                    # Para db
+                    result = socket.getaddrinfo(
+                        NODE_TYPE_DB, 
+                        self.port, 
+                        socket.AF_INET, 
+                        socket.SOCK_STREAM
+                    )
+                    
+                    # Extraer IPs únicas excluyendo la propia
+                    db_ips = [addr_info[4][0] for addr_info in result]
+                    logging.debug(f"Nodos '{NODE_TYPE_DB}' encontrados para lideres: {db_ips}")
+
+                    # Preguntar por lider a cada uno
+                    msg_leader_query = MessageProtocol.create_message(
+                        msg_type=MessageProtocol.MESSAGE_TYPES['LEADER_QUERY_TO_OTHER_BOSS'],
+                        sender_id=self.ip,
+                        node_type=self.node_type,
+                        timestamp=datetime.now().isoformat()
+                    )
+                    for ip in db_ips:
+                        try:
+                            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                            sock.settimeout(5)
+                            sock.connect((ip, PORT_DB))
+
+                            msg_bytes = msg_leader_query.encode()
+                            sock.send(len(msg_bytes).to_bytes(2, 'big'))
+                            sock.send(msg_bytes)
+                            logging.info(f"Mensaje de leader_query enviado a {ip}:{PORT_DB} para lideres")
+                            sock.close()
+
+                        except socket.timeout as e:
+                            logging.debug(f"No se pudo conectar a {ip}:{PORT_DB} para lideres: {e}")
+                        except Exception as e:
+                            logging.error(f"Error conectando a {ip}:{PORT_DB} para lideres: {e}")
+
+            except socket.gaierror as e:
+                logging.warning(f"No se pudo resolver  node_type {NODE_TYPE_DB}  en Docker DNS para lideres: {e}")
+                logging.debug(f"Reintentando en {intervalo} segundos...")
+            except Exception as e:
+                logging.error(f"Error en descubrimiento de nodos para lideres: {e}")
+                time.sleep(intervalo)
+            
+            try:
+                if self.jefe_scrapper == None:
+                    # Resolver directamente el node_type como network-alias (ej: 'router')
+                    # Para scrapper
+                    result = socket.getaddrinfo(
+                        NODE_TYPE_SCRAPPER, 
+                        self.port, 
+                        socket.AF_INET, 
+                        socket.SOCK_STREAM
+                    )
+                    
+                    # Extraer IPs únicas excluyendo la propia
+                    scrapper_ips = [addr_info[4][0] for addr_info in result]
+                    logging.debug(f"Nodos '{NODE_TYPE_SCRAPPER}' encontrados para lideres: {scrapper_ips}")
+
+                    # Preguntar por lider a cada uno
+                    msg_leader_query = MessageProtocol.create_message(
+                        msg_type=MessageProtocol.MESSAGE_TYPES['LEADER_QUERY_TO_OTHER_BOSS'],
+                        sender_id=self.ip,
+                        node_type=self.node_type,
+                        timestamp=datetime.now().isoformat()
+                    )
+                    for ip in scrapper_ips:
+                        try:
+                            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                            sock.settimeout(5)
+                            sock.connect((ip, PORT_SCRAPPER))
+
+                            msg_bytes = msg_leader_query.encode()
+                            sock.send(len(msg_bytes).to_bytes(2, 'big'))
+                            sock.send(msg_bytes)
+                            logging.info(f"Mensaje de leader_query enviado a {ip}:{PORT_SCRAPPER} para lideres")
+                            sock.close()
+
+                        except socket.timeout as e:
+                            logging.debug(f"No se pudo conectar a {ip}:{self.port} para lideres: {e}")
+                        except Exception as e:
+                            logging.error(f"Error conectando a {ip}:{self.port} para lideres: {e}")
+                
+
+                time.sleep(intervalo)
+            
+            except socket.gaierror as e:
+                logging.warning(f"No se pudo resolver node_type {NODE_TYPE_DB} o {NODE_TYPE_SCRAPPER} en Docker DNS para lideres: {e}")
+                logging.debug(f"Reintentando en {intervalo} segundos...")
+                time.sleep(intervalo)
+            except Exception as e:
+                logging.error(f"Error en descubrimiento de nodos para lideres: {e}")
+                time.sleep(intervalo)
+  
+    def enviar_lider_a_otro_jefe(self, message=None, sender_id=None, node_type=None, timestamp=None, data=None):
+        '''Envía el líder actual al nodo que lo solicitó'''
+
+        if self.lider and self.lider[0][0] in [addr[0] for addr in self.conexiones_activas.keys()]:
+            lider_actual = (self.lider, self.port)
+        
+            respuesta_msg = MessageProtocol.create_message(
+                msg_type=MessageProtocol.MESSAGE_TYPES['LEADER_RESPONSE_TO_OTHER_BOSS'],
+                sender_id=self.ip,
+                node_type=self.node_type,
+                timestamp=datetime.now().isoformat(),
+                data={'lider': lider_actual}
+            )
+
+            try:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(5)
+                if node_type == NODE_TYPE_DB:
+                    sock.connect((sender_id, PORT_DB))
+                elif node_type == NODE_TYPE_SCRAPPER:
+                    sock.connect((sender_id, PORT_SCRAPPER))
+                msg_bytes = respuesta_msg.encode()
+                sock.send(len(msg_bytes).to_bytes(2, 'big'))
+                sock.send(msg_bytes)
+                logging.info(f"Mensaje de líder actual enviado a {sender_id}")
+                sock.close()
+            
+            except socket.timeout as e:
+                logging.debug(f"No se pudo conectar a {sender_id} para enviar líder: {e}")
+            except Exception as e:
+                logging.error(f"Error conectando a {sender_id} para enviar líder: {e}")
+
+        else:
+            logging.info(f"No hay conexión activa con {sender_id} para enviar líder")
+
+    def handle_lider_response_from_other_boss(self, message, sender_id, node_type, timestamp, data):
+        '''Maneja la respuesta de líder de otro jefe'''
+        lider = data.get('lider', None)
+        logging.info(f"Líder recibido de {sender_id}: {lider} de tipo {node_type}")
+
+        if lider:
+            if node_type == NODE_TYPE_DB:
+                lider_ip = lider[0][0]
+                self.jefe_db = (lider, self.conectar_a(lider_ip, PORT_DB))
+                logging.info(f"encontrado a {lider} jefe de DB")
+            elif node_type == NODE_TYPE_SCRAPPER:
+                self.jefe_scrapper = (lider, self.conexiones_activas.get(lider, None))
+                logging.info(f"Jefe Scrapper actualizado a {lider}")
+
+
     # =================para conectarse a otro nodo=================
 
 
@@ -281,8 +440,11 @@ class ServiceDiscoverer:
         while not self.stop_event.is_set():
             try:
                 # esperar mensaje con timeout para poder verificar stop_event
-                message, conn = self.message_queue.get(timeout=1.0)
+                message_bytes, conn = self.message_queue.get(timeout=1.0)
                 ip, port = conn.getsockname()
+                peer_ip, peer_port = conn.getpeername()
+                message = message_bytes.decode()
+                msg_type = json.loads(message).get('type')
 
                 if message is None:
                     logging.debug('Cola de mensajes vacía, finalizando worker')
@@ -290,12 +452,12 @@ class ServiceDiscoverer:
 
                 try:
                     # enviar longitud
-                    lenght = len(message)
+                    lenght = len(message_bytes)
                     conn.send(lenght.to_bytes(2, 'big'))
                     
                     # enviar mensaje completo
-                    conn.send(message)
-                    logging.debug('Mensaje enviado exitosamente')
+                    conn.send(message_bytes)
+                    logging.debug(f"Mensaje enviado a {peer_ip} de tipo {msg_type}")
 
                 except Exception as e:
                     logging.error(f"Error enviando mensaje (reintentando): {e}")
@@ -320,7 +482,7 @@ class ServiceDiscoverer:
             return False
         
         try:
-            message_bytes = json.dumps(message_dict).encode()
+            message_bytes = message_dict.encode()
             self.message_queue.put((message_bytes, conn))
             return True
         
@@ -348,6 +510,8 @@ class ServiceDiscoverer:
                 logging.debug(f"Conexiones activas: {len(self.conexiones_activas)} nodos")
                 connections_copy = self.conexiones_activas.copy()
                 for ip, conn in connections_copy.items():
+                    logging.info(f"ip: {ip}")
+                    logging.info(f"jefe_db:{self.jefe_db} jefe_scrapper:{self.jefe_scrapper}")
                     if self._enqueue_message(heartbeat_msg, ip, conn):
                         logging.debug(f"Heartbeat encolado para {ip}")
 
@@ -438,6 +602,7 @@ class ServiceDiscoverer:
                 logging.warning(f"Conflicto de líder detectado: local={self.lider}, remoto={leader}")
                 self.lider = comparar_lista_ips([self.lider, leader])
                 logging.info(f"Líder resuelto: {self.lider}")
+                #
                 logging.debug("Notificando líder resuelto a todos los nodos")
                 self.enviar_lider_actual()
         except Exception as e:
@@ -484,9 +649,12 @@ class ServiceDiscoverer:
         threading.Thread(target=self.send_heartbeat, daemon=True).start()
         time.sleep(2)
         threading.Thread(target=self.verificar_conec_de_lider, daemon=True).start()
+        threading.Thread(target=self.buscar_otros_lideres, daemon=True).start()
+         # hilo de estado
 
         while(True):
             logging.info(f"Estado: Líder={self.lider}, Conexiones={len(self.conexiones_activas)}")
+            logging.info(f"Jefe DB={self.jefe_db}, Jefe Scrapper={self.jefe_scrapper}")
             time.sleep(20)
 
 

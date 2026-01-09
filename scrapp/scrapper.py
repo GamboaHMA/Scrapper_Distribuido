@@ -99,301 +99,34 @@ logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 
-class DatabaseNode:
-    def __init__(self, port=PORT_DB):
-        self.node_type = NODE_TYPE_DB
+
+class ScrappingNode:
+    def __init__(self, port=PORT_SCRAPPER):
+        '''Metodo de inicializacion del scrapper'''
+
+        self.node_type = NODE_TYPE_SCRAPPER
         self.name = socket.gethostname()
         self.ip = socket.gethostbyname(self.name)
         self.port = port
         self.sock_escucha = None
         self.escuchando = False
-        self.conexiones_activas = {}  # diccionario de key: (ip,port), value: conn
-        self.control_de_latidos:dict[str, datetime] = {}  # una ip con una fecha
-        self.control_de_latidos[self.ip] = datetime.now()  # tiempo en que el nodo se queda sin lider, inicialmente entra sin lider
-        self.lider = None  # ip del nodo lider actual
-        # cola de mensajes a enviar, a diferencia del centralizado, aqui guardaremos la tupla, mensaje-socket, para enviar el mensaje al receptor correcto
+        self.lider = None  # IP del lider actual
+        self.conexiones_activas = {}  # diccionario de conexiones activas {ip: socket}
+        self.control_de_latidos:dict[str, datetime] = {}
+        self.control_de_latidos[self.ip] = datetime.now()
+        # cola de mensajes a enviar
         self.message_queue = queue.Queue()
         self.stop_event = threading.Event()
         # hilo de envio
-        self.send_thread = None
+        self.send_trend = None
         self.status_lock = threading.Lock()
-        #base de datos
-        self.db_conn = None
-        self.db_cursor = None
-        self.logs_conn = None
-        self.logs_cursor = None
-        self.data_dir = f"{self.name}"
-        # jefes directamente 
-        self.jefe_router = None
-        self.jefe_scrapper = None
-        logging.info("a punto de iniciar base de datos")
-        self.init_database()
-
-    #========================Database=========================
-
-    def init_database(self):
-        '''Inicializa la base de datos'''
-        try:
-            # crear directorio si no existe
-            Path(self.data_dir).mkdir(parents=None, exist_ok=True)
-
-            # base de datos para las url
-            db_path = f"{self.data_dir}/{self.data_dir}.db"
-            logging.info(f"db_path: {db_path}")
-            self.db_conn = sqlite3.connect(db_path, check_same_thread=False)
-            self.db_cursor = self.db_conn.cursor()
-
-            # tabla de urls y su id
-            self.db_cursor.execute('''
-                CREATE TABLE IF NOT EXISTS urls (
-                    url_id INTEGER PRIMARY KEY,
-                    url TEXT UNIQUE NOT NULL,
-                    firstseen DATETIME DEFAULT CURRENT_TIMESTAMP
-                )
-            '''
-            )
-
-            # tabla de databases
-            self.db_cursor.execute('''
-                CREATE TABLE IF NOT EXISTS databases (
-                    database_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    node_id TEXT UNIQUE NOT NULL,
-                    database_name TEXT,
-                    is_active BOOLEAN DEFAULT 1,
-                    last_heartbeat TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    UNIQUE(node_id, database_name)    
-                )
-
-            '''
-            )
-
-            # tabla de urls para almacenar: cantidad de replicas
-            self.db_cursor.execute('''
-                CREATE TABLE IF NOT EXISTS urls_replicas (
-                    url_id INTEGER PRIMARY KEY,
-                    current_replicas INTEGER DEFAULT 0,
-                    target_replicas INTEGER DEFAULT 3,
-                    FOREIGN KEY (url_id) REFERENCES urls(url_id) ON DELETE CASCADE            
-                )
-            '''
-            )
-
-            # tabla para guardar los contenidos de las urls (nodos no jefe)
-            self.db_cursor.execute('''
-                CREATE TABLE IF NOT EXISTS url_content (
-                    content_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    url_id INTEGER NOT NULL,
-                    content TEXT,
-                    scrapped_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (url_id) REFERENCES urls(url_id) ON DELETE CASCADE,
-                    UNIQUE(url_id)
-                )
-            '''
-            )
-
-            # tabla para guardar la tupla url-database, que nos dira en cuales bases de datos se guardo una url
-            self.db_cursor.execute('''
-                CREATE TABLE IF NOT EXISTS url_db_log (
-                    location_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    url_id INTEGER NOT NULL,
-                    database_id INTEGER NOT NULL,
-                    added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY(url_id) REFERENCES urls(url_id) ON DELETE CASCADE,
-                    FOREIGN KEY(database_id) REFERENCES databases(database_id) ON DELETE CASCADE,
-                    UNIQUE(url_id, database_id)
-                )
-          '''
-          )
-
-            self.db_conn.commit()
-            self.db_cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
-            tablas = self.db_cursor.fetchall()
-            logging.info(f"Base de datos inicializada en {self.data_dir}")
-            logging.info(f"Tablas: {tablas}")
-            
-        
-        except Exception as e:
-            logging.error(f"Error inicilizando la base de datos: {e}")
-
-    def leader_url_query(self, message, sender_id, node_type, timestamp, data):
-        '''Metodo que ejecutara el nodo cuando es lider, revisa en el log de las urls, si esta toma una base
-           de datos aleatoria de todas las que tienen la info y les pide el content de la url, en caso de que 
-           no este en la tabla de logs, entonces devuelve False'''
-        
-        url = data.get('url')
-
-        self.db_cursor.execute('''
-            SELECT url_id FROM urls WHERE url = ?;
-        '''
-        ,(url))
-
-        url_id = self.db_cursor.fetchone()[0]
-
-        self.db_cursor.execute('''
-            SELECT d.database_id
-            FROM url_db_log udl
-            JOIN databases d ON udl.database_id = d.database
-            WHERE udl.url_id = ?
-            ORDER BY d.database_id
-        '''
-        ,(url_id))
-
-        databases_ips = self.db_cursor.fetchall()
-
-        if len(databases_ips) != 0:
-            for database_ip in databases_ips:
-                with self.status_lock:
-                    if database_ip in self.conexiones_activas.keys():
-                        url_query_message = MessageProtocol.create_message(
-                            msg_type=MessageProtocol.MESSAGE_TYPES['URL_QUERY'],
-                            sender_id=self.ip,
-                            node_type=self.node_type,
-                            timestamp=datetime.now(),
-                            data={'id_to_send':sender_id, 'url': url}
-                        )
-                        conn = self.conexiones_activas[database_ip]
-                        self._enqueue_message(url_query_message, database_ip, conn)
-                        break
-                    
-        else:
-            # mandar mensaje de que no hay registro al que consulto
-            url_query_response = MessageProtocol.create_message(
-                msg_type=MessageProtocol.MESSAGE_TYPES['URL_QUERY_RESPONSE'],
-                sender_id=self.ip,
-                node_type=self.node_type,
-                timestamp=datetime.now(),
-                data={'response':False}
-            )
-            try:
-                conn = self.conexiones_activas[sender_id]
-                self._enqueue_message(url_query_response, sender_id, conn)
-            except Exception as e:
-                logging.error(f"fallo al acceder al socket de {sender_id} con {self.ip}: {e}")
-
-    def no_leader_url_query(self, message, sender_id, node_type, timestamp, data):
-        '''Metodo que ejecutara el nodo cuando no es lider, revisa en la base de datos la url, y devuelve el contenido'''
-        url = data.get('url')
-        id_to_send = data.get('id_to_send')
-
-        self.db_cursor.execute('''
-            SELECT url_id
-            FROM urls 
-            WHERE url = ?
-        '''
-        ,(url))
-
-        url_id = self.db_cursor.fetchall()
-
-        if len(url_id) == 0:
-            logging.error(f"url: {url} no se encuentra en la tabla urls de nodo: {self.ip}")
-            return
-        else:
-            url_id = url_id[0] 
-
-        self.db_cursor.execute('''
-            SELECT content
-            FROM url_content
-            WHERE url_id = ?
-        '''
-        ,(url_id))
-
-        content = self.db_cursor.fetchall()
-
-        if len(content) == 0:
-            logging.error(f"url_id: {url_id} no se encuentra en la tabla url_content del nodo: {self.ip}")
-            return
-        else:
-            content = content[0]
-        
-        #crear mensaje de respuesta
-        content_message = MessageProtocol.create_message(
-            msg_type=MessageProtocol.MESSAGE_TYPES['URL_QUERY_RESPONSE'],
-            sender_id=self.ip,
-            node_type=self.node_type,
-            data={'response':True, 'content':content}
-        )
-
-        # hacer un socket temporal para mandar el mensaje
-        try:
-            conn = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            conn.settimeout(30)
-            conn.connect((id_to_send, self.port))
-
-            if self._enqueue_message(content_message, id_to_send, conn):
-                logging.info(f"mensaje de url_query_response a {id_to_send} encolado")
-        
-        except Exception as e:
-            logging.error(f"error al enviar mensaje de tipo url_query_response a {id_to_send}: {e}")
-            
-    def recive_task_result(self, message, sender_id, node_type, timestamp, data):
-        '''Recibe lo escrapeado de la url directo de un nodo scrapper, y le manda la info
-           a tres de las base de datos conectadas, para garantizar la replicabilidad de 3,
-           el que recibe el mensaje es el lider'''
-        
-        result = data.get('result')
-        url = result.get('url')
-        content = result.get('content')
-        completed_at = data.get('completed_at')
-
-        message_to_no_leaders = MessageProtocol.create_message(
-            msg_type=MessageProtocol.MESSAGE_TYPES['TASK_RESULT_NO_LEADER'],
-            sender_id=sender_id,
-            node_type=node_type,
-            timestamp=datetime.now().isoformat(),
-            data={'url': url, 'content': content, 'completed_at': completed_at}
-        )
-
-        # enviar a tres bases de datos aleatorias conectadas
-        databases_conectadas = list(self.conexiones_activas.keys())
-        random.shuffle(databases_conectadas)
-        databases_seleccionadas = databases_conectadas[:3] # no importa si son menos de tres, se envian a las que haya
-
-        for database_ip in databases_seleccionadas:
-            conn = self.conexiones_activas[database_ip]
-            self._enqueue_message(message_to_no_leaders, database_ip, conn)
-            logging.info(f"mensaje de task_result_no_leader a {database_ip} encolado")
-        
-    def recive_task_result_no_leader(self, message, sender_id, node_type, timestamp, data):
-        '''Recibe el resultado del lider y lo almacena en su base de datos'''
-        url = data.get('url')
-        content = data.get('content')
-        completed_at = data.get('completed_at')
-
-        try:
-            # insertar url en tabla urls
-            self.db_cursor.execute('''
-                INSERT OR IGNORE INTO urls (url) VALUES (?);
-            ''', (url,))
-            self.db_conn.commit()
-
-            # obtener url_id
-            self.db_cursor.execute('''
-                SELECT url_id FROM urls WHERE url = ?;
-            ''', (url,))
-            url_id = self.db_cursor.fetchone()[0]
-
-            # insertar contenido en tabla url_content
-            self.db_cursor.execute('''
-                INSERT OR REPLACE INTO url_content (url_id, content, scrapped_at)
-                VALUES (?, ?, ?);
-            ''', (url_id, content, completed_at))
-            self.db_conn.commit()
-
-            logging.info(f"Contenido de URL {url} almacenado correctamente en la base de datos.")
-        
-        except Exception as e:
-            logging.error(f"Error almacenando contenido de URL {url}: {e}")
-        
-            
+        # jefes directamente
+        self.jefe_router = None  # ((ip, addr), sock)
+        self.jefe_db = None  # ((ip, addr), sock)
 
 
-    #========================database=========================
-
-        
-
-    #=========================Escucha=========================
-
+    #========================Escucha======================
+    
     def iniciar_escucha(self):
         '''Escuchando conexiones entrantes'''
         self.sock_de_servidor = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -460,9 +193,6 @@ class DatabaseNode:
             MessageProtocol.MESSAGE_TYPES['HEARTBEAT']: self.receive_heartbeat,
             MessageProtocol.MESSAGE_TYPES['LEADER_QUERY']: self.enviar_lider_actual,
             MessageProtocol.MESSAGE_TYPES['LEADER_RESPONSE']: self.recibir_respuesta_de_lider_query,
-            MessageProtocol.MESSAGE_TYPES['URL_QUERY_LEADER']: self.leader_url_query,
-            MessageProtocol.MESSAGE_TYPES['URL_QUERY']: self.no_leader_url_query,
-            MessageProtocol.MESSAGE_TYPES['TASK_RESULT']: self.recive_task_result,
             MessageProtocol.MESSAGE_TYPES['LEADER_QUERY_TO_OTHER_BOSS']: self.enviar_lider_a_otro_jefe,
             MessageProtocol.MESSAGE_TYPES['LEADER_RESPONSE_TO_OTHER_BOSS']: self.handle_lider_response_from_other_boss,
             #MessageProtocol.MESSAGE_TYPES['COORDINATOR']: self.handle_coordinator,
@@ -482,7 +212,6 @@ class DatabaseNode:
                 logging.error(f"error en handler: {e}")
         else:
             logging.error(f"Tipo de mensaje: {message.get('type')} desconocido")
-
 
     def recibir_mensaje(self, socket_):
         '''Encargado de recibir el mensaje con protocolo longitud-mensaje'''
@@ -568,6 +297,7 @@ class DatabaseNode:
             logging.error(f"Timeout error al conectarse a {destino}")
         except socket.error as e:
             logging.error(f"Error conectando a {destino}:{self.port} - {e}")
+            logging.info(f"destino: {destino}")
                           
         return None
 
@@ -615,11 +345,11 @@ class DatabaseNode:
                         except Exception as e:
                             logging.error(f"Error conectando a {ip}:{PORT_ROUTER} para lideres: {e}")
                 
-                if self.jefe_scrapper == None:
+                if self.jefe_db == None:
                     # Resolver directamente el node_type como network-alias (ej: 'router')
                     # Para scrapper
                     result = socket.getaddrinfo(
-                        NODE_TYPE_SCRAPPER, 
+                        NODE_TYPE_DB, 
                         self.port, 
                         socket.AF_INET, 
                         socket.SOCK_STREAM
@@ -627,7 +357,7 @@ class DatabaseNode:
                     
                     # Extraer IPs únicas excluyendo la propia
                     scrapper_ips = [addr_info[4][0] for addr_info in result]
-                    logging.debug(f"Nodos '{NODE_TYPE_SCRAPPER}' encontrados para lideres: {scrapper_ips}")
+                    logging.debug(f"Nodos '{NODE_TYPE_DB}' encontrados para lideres: {scrapper_ips}")
 
                     # Preguntar por lider a cada uno
                     msg_leader_query = MessageProtocol.create_message(
@@ -640,24 +370,24 @@ class DatabaseNode:
                         try:
                             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                             sock.settimeout(5)
-                            sock.connect((ip, PORT_SCRAPPER))
+                            sock.connect((ip, PORT_DB))
 
                             msg_bytes = msg_leader_query.encode()
                             sock.send(len(msg_bytes).to_bytes(2, 'big'))
                             sock.send(msg_bytes)
-                            logging.info(f"Mensaje de leader_query enviado a {ip}:{PORT_SCRAPPER} para lideres")
+                            logging.info(f"Mensaje de leader_query enviado a {ip}:{PORT_DB} para lideres")
                             sock.close()
 
                         except socket.timeout as e:
-                            logging.debug(f"No se pudo conectar a {ip}:{PORT_SCRAPPER} para lideres: {e}")
+                            logging.debug(f"No se pudo conectar a {ip}:{PORT_DB} para lideres: {e}")
                         except Exception as e:
-                            logging.error(f"Error conectando a {ip}:{PORT_SCRAPPER} para lideres: {e}")
+                            logging.error(f"Error conectando a {ip}:{PORT_DB} para lideres: {e}")
                 
 
                 time.sleep(intervalo)
             
             except socket.gaierror as e:
-                logging.warning(f"No se pudo resolver node_type {NODE_TYPE_ROUTER} o {NODE_TYPE_SCRAPPER} en Docker DNS para lideres: {e}")
+                logging.warning(f"No se pudo resolver node_type {NODE_TYPE_DB} o {NODE_TYPE_ROUTER} en Docker DNS para lideres: {e}")
                 logging.debug(f"Reintentando en {intervalo} segundos...")
                 time.sleep(intervalo)
             except Exception as e:
@@ -683,8 +413,8 @@ class DatabaseNode:
                 sock.settimeout(5)
                 if node_type == NODE_TYPE_ROUTER:
                     sock.connect((sender_id, PORT_ROUTER))
-                elif node_type == NODE_TYPE_SCRAPPER:
-                    sock.connect((sender_id, PORT_SCRAPPER))
+                elif node_type == NODE_TYPE_DB:
+                    sock.connect((sender_id, PORT_DB))
                 msg_bytes = respuesta_msg.encode()
                 sock.send(len(msg_bytes).to_bytes(2, 'big'))
                 sock.send(msg_bytes)
@@ -699,6 +429,7 @@ class DatabaseNode:
         else:
             logging.info(f"No hay conexión activa con {sender_id} para enviar líder")
 
+
     def handle_lider_response_from_other_boss(self, message, sender_id, node_type, timestamp, data):
         '''Maneja la respuesta de líder de otro jefe'''
         lider = data.get('lider', None)
@@ -710,14 +441,14 @@ class DatabaseNode:
                 self.conectar_a(lider_ip, PORT_ROUTER)
                 self.jefe_router = (lider, self.conectar_a(lider_ip, PORT_ROUTER))
                 logging.info(f"encontrado a {lider} jefe de DB")
-            elif node_type == NODE_TYPE_SCRAPPER:
-                self.jefe_scrapper = (lider, self.conexiones_activas.get(lider, None))
-                logging.info(f"Jefe Scrapper actualizado a {lider}")
-
-    #=================para conectarse a otros nodos==================
+            elif node_type == NODE_TYPE_DB:
+                self.jefe_db = (lider, self.conexiones_activas.get(lider, None))
+                logging.info(f"Jefe DB actualizado a {lider}")
 
 
-    #===================Para el envio de mensajes==================== 
+    #==============para conectarse con otros nodos======================
+
+    #======================Para el envio de mensajes====================
 
     def send_worker(self):
         '''Hilo que envia los mensajes de la cola'''
@@ -775,11 +506,11 @@ class DatabaseNode:
         except Exception as e:
             logging.error(f"Error encolando mensaje: {message_bytes}: {e}")
             return False                
-            
-    #====================para el envio de mensajes=================
 
-    #====================Funcionalidades del nodo==================
+    #======================para el envio de mensajes====================
 
+    #=====================Funcionalidades del Nodo=======================
+    
     def send_heartbeat(self):
         '''envia senial periodica a todos los similares a los que esta conectado''' # como el proyecto es a fallas de 2 nodos, tendra dos companieros
         while True:
@@ -803,7 +534,7 @@ class DatabaseNode:
             
             except Exception as e:
                 logging.error(f"Error al enviar un latido: {e}")
-    
+
     def receive_heartbeat(self, message, sender_id, node_type, timestamp, data):
         '''Actualiza el ultimo latido para el control de latidos'''
         self.control_de_latidos[sender_id] = datetime.now()
@@ -823,14 +554,10 @@ class DatabaseNode:
                 self.conexiones_activas[node_ip].close()
                 del(self.conexiones_activas[node_ip])
                 break
-            
-            #logging.info(f"Diferencia de {dif}\nEl nodo esta activo, continuando ciclo ...")
 
-    
+    #=====================funcionalidades del Nodo=======================
 
-    #===================funcionalidades del nodo===================
-
-    #======================Eleccion de lider=======================
+    #=====================Eleccion de Lider===================
 
     def verificar_conec_de_lider(self, timeout = 15):
         '''hilo encargado de verificar la conectividad del lider actual'''
@@ -920,9 +647,7 @@ class DatabaseNode:
                 self._enqueue_message(leader_message, ip, conn)
                 logging.info(f"mensaje de lider a {ip} encolado")
 
-            
-
-    #======================eleccion de lider=======================
+    #=====================Eleccion de Lider===================
 
     def cerrar_nodo(self):
         conex_activas_copy = self.conexiones_activas.copy()
@@ -936,7 +661,8 @@ class DatabaseNode:
         self.stop_event.set()
         logging.info(f"cerrando nodo {self.name} ip: {self.ip}")
 
-    #=======================Bucle principal========================
+
+    #=======================Bucle Principal======================
 
     def iniciar_nodo(self):
         '''echa a andar todos los procesos del nodo'''
@@ -951,14 +677,12 @@ class DatabaseNode:
             logging.info('entrando al ciclo principal')
             logging.info(f"lider actual: {self.lider}")
             time.sleep(20)
-            
-    #======================bucle principal=========================
 
+    #=======================bucle Principal======================
 
-
-if __name__ == "__main__":#
-    databaseNode = DatabaseNode()
+if __name__ == "__main__":
+    scrapingNode = ScrappingNode()
     try:
-        databaseNode.iniciar_nodo()
-    except KeyboardInterrupt:
-        databaseNode.cerrar_nodo()
+        scrapingNode.iniciar_nodo()
+    except KeyboardInterrupt as e:
+        scrapingNode.cerrar_nodo()
