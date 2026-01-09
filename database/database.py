@@ -63,6 +63,18 @@ class DatabaseNode(Node):
     
         self.init_database()
 
+    def start_boss_tasks(self):
+        """
+        Sobrescribe el método de Node para iniciar tareas específicas del jefe BD.
+        Se llama automáticamente cuando este nodo es elegido como jefe.
+        """
+        logging.info("Iniciando tareas de jefe BD...")
+        
+        # Iniciar búsqueda y conexión con jefes externos (Router)
+        self._connect_to_external_bosses()
+        
+        logging.info("Tareas de jefe BD iniciadas correctamente")
+
     def _register_bd_handlers(self):
         '''Registrar handlers para mensajes especificos de bd'''
         
@@ -454,6 +466,174 @@ class DatabaseNode(Node):
             time.sleep(0.1)
                     
     #=====para comprobar los subordinados que se incorporan========
+
+
+    #============= PARA DESCUBRIR A LOS OTROS JEFES ==============
+
+    def _connect_to_external_bosses(self):
+        """Conecta con el jefe Router cuando este nodo BD es jefe"""
+        if not self.i_am_boss:
+            logging.debug("No soy jefe, no necesito conectar con jefes externos")
+            return
+            
+        logging.info("Conectando con jefe externo Router...")
+        
+        threading.Thread(
+            target=self._periodic_boss_search,
+            args=('router',),
+            daemon=True
+        ).start()
+
+    def _periodic_boss_search(self, node_type):
+        """
+        Busca periódicamente al jefe Router hasta encontrarlo y mantener la conexión.
+        
+        Args:
+            node_type: Tipo de nodo a buscar ('router')
+        """
+        retry_interval = 5  # segundos entre intentos
+        boss_profile = self.external_bosses[node_type]
+
+        logging.info(f"Iniciando búsqueda periódica del jefe {node_type}...")
+
+        while self.running:
+            # Si ya estamos conectados, solo monitorear
+            if boss_profile.is_connected():
+                # Esperar y verificar conexión
+                time.sleep(retry_interval)
+                continue
+            
+            # No conectado, buscar
+            logging.debug(f"Buscando jefe {node_type}...")
+            
+            # Intentar descubrir nodos
+            node_ips = self.discover_nodes(node_type, boss_profile.port)
+            
+            if node_ips:
+                # Buscar el jefe en la lista
+                boss_ip = self._find_boss_in_list(node_ips, node_type)
+                
+                if boss_ip:
+                    logging.info(f"Jefe {node_type} encontrado en {boss_ip}")
+                    self._connect_to_boss(node_type, boss_ip)
+                    
+                    # Verificar que la conexión fue exitosa
+                    if boss_profile.is_connected():
+                        logging.info(f"✓ Conexión con jefe {node_type} establecida")
+                else:
+                    logging.debug(f"Nodos {node_type} encontrados pero ninguno es jefe")
+            else:
+                logging.debug(f"No se encontraron nodos {node_type} en el DNS")
+            
+            # Esperar antes del siguiente intento
+            time.sleep(retry_interval)
+
+    def _find_boss_in_list(self, ip_list, node_type):
+        """
+        Encuentra el jefe en una lista de IPs consultando temporalmente.
+        
+        Args:
+            ip_list: Lista de IPs a consultar
+            node_type: Tipo de nodo ('bd', 'scrapper')
+        
+        Returns:
+            str: IP del jefe o None
+        """
+        boss_profile = self.external_bosses[node_type]
+        
+        logging.debug(f"Buscando jefe {node_type} en lista de {len(ip_list)} IPs: {ip_list}")
+        
+        for ip in ip_list:
+            if ip == self.ip:
+                logging.debug(f"Saltando mi propia IP: {ip}")
+                continue
+            
+            logging.debug(f"Consultando si {ip} es jefe {node_type}...")
+            
+            # Enviar identificación temporal
+            msg = self._create_message(
+                MessageProtocol.MESSAGE_TYPES['IDENTIFICATION'],
+                {'is_temporary': True}
+            )
+            
+            response = self.send_temporary_message(
+                ip, 
+                boss_profile.port, 
+                msg, 
+                expect_response=True,
+                # timeout=5.0,
+                node_type=node_type
+            )
+            
+            if response:
+                is_boss = response.get('data', {}).get('is_boss', False)
+                logging.debug(f"Respuesta de {ip}: is_boss={is_boss}")
+                if is_boss:
+                    logging.info(f"✓ {ip} es el jefe {node_type}")
+                    return ip
+                else:
+                    logging.debug(f"✗ {ip} no es jefe {node_type}")
+            else:
+                logging.debug(f"✗ No hubo respuesta de {ip}")
+        
+        logging.debug(f"No se encontró jefe {node_type} en la lista")
+        return None
+
+    def _connect_to_boss(self, node_type, boss_ip):
+        """
+        Establece conexión persistente con el jefe externo.
+        
+        Args:
+            node_type: Tipo de nodo jefe
+            boss_ip: IP del jefe
+        """
+        boss_profile = self.external_bosses[node_type]
+        
+        try:
+            # Crear NodeConnection
+            connection = NodeConnection(
+                node_type=node_type,
+                ip=boss_ip,
+                port=boss_profile.port,
+                on_message_callback=self._handle_message_from_node,
+                sender_node_type=self.node_type,
+                sender_id=self.node_id
+            )
+            
+            # Conectar
+            if connection.connect():
+                logging.debug(f"Socket conectado exitosamente con {node_type} en {boss_ip}")
+                
+                # Enviar identificación
+                identification_msg = self._create_message(
+                    MessageProtocol.MESSAGE_TYPES['IDENTIFICATION'],
+                    {
+                        'is_temporary': False,
+                        'is_boss': self.i_am_boss,
+                        'port': self.port
+                    }
+                )
+                
+                logging.debug(f"Enviando identificación a {node_type}...")
+                if connection.send_message(identification_msg):
+                    logging.debug(f"Identificación enviada exitosamente a {node_type}")
+                else:
+                    logging.error(f"Error enviando identificación a {node_type}")
+                
+                # Actualizar BossProfile (set_connection ya tiene su propio lock)
+                logging.debug(f"Actualizando BossProfile para {node_type}...")
+                boss_profile.set_connection(connection)
+                logging.debug(f"BossProfile actualizado. is_connected={boss_profile.is_connected()}")
+                
+                logging.info(f"✓ Conexión establecida con jefe {node_type} en {boss_ip}")
+            else:
+                logging.error(f"No se pudo conectar con jefe {node_type} en {boss_ip}")
+                
+        except Exception as e:
+            logging.error(f"Error conectando con jefe {node_type}: {e}")
+            boss_profile.clear_connection()
+
+    #============= PARA DESCUBRIR A LOS OTROS JEFES ==============
 
 
 if __name__ == "__main__":

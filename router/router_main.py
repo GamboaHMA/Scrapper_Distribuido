@@ -96,7 +96,7 @@ class RouterNode(Node):
     - Responder a clientes
     """
     
-    def __init__(self, scrapper_port=8080, bd_port=7070):
+    def __init__(self, scrapper_port=8080, bd_port=9090):
         """
         Inicializa el nodo Router.
         
@@ -256,8 +256,7 @@ class RouterNode(Node):
                 else:
                     logging.debug(f"Jefe externo {sender_node_type} ya tiene conexión activa")
             
-            # Delegar al handler del padre para procesamiento adicional
-            super()._handle_identification(node_connection, message_dict)
+            # NO delegar al padre - Router usa external_bosses (BossProfile), no bosses_connections
         
         else:
             # Delegar al handler del padre para nodos del sistema

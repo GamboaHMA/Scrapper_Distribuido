@@ -23,4 +23,4 @@ ENV LOG_LEVEL=INFO
 EXPOSE 7070
 
 # Comando para ejecutar el database
-CMD ["python3", "-m", "database.database"]
+CMD ["python", "-m", "database.database"]
