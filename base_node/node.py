@@ -1238,7 +1238,10 @@ class Node:
     
         boss_found = False
         
-        for ip, info in discovered.items():
+        # Hacer una copia para evitar "dictionary changed size during iteration"
+        discovered_copy = dict(discovered)
+        
+        for ip, info in discovered_copy.items():
             if ip == self.ip:
                 continue
             
