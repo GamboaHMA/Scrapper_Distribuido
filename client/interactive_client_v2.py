@@ -25,6 +25,7 @@ from queue import Queue, Empty
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from base_node.utils import MessageProtocol
+from base_node.utils.node_connection import NodeConnection
 
 # Configuración - Usa hostnames de Docker (network-alias)
 ROUTER_HOST = os.environ.get('ROUTER_HOST', 'router')
@@ -40,15 +41,13 @@ class InteractiveClient:
         self.router_ip = None
         self.running = True
         
-        # Conexión persistente con el router
-        self.router_socket = None
-        self.socket_lock = threading.Lock()
+        # Conexión persistente con el router usando NodeConnection
+        self.router_connection = None
         
         # Cliente ID único
         self.client_id = f"client-{uuid.uuid4().hex[:8]}"
         
-        # Threads
-        self.receive_thread = None
+        # Thread de heartbeat
         self.heartbeat_thread = None
         
         # Tracking de peticiones pendientes
@@ -187,12 +186,28 @@ class InteractiveClient:
         self.log(f"✓ Router Jefe identificado: {self.router_ip}:{self.router_port}", "SUCCESS")
         
         try:
-            # Crear socket persistente
-            self.router_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.router_socket.connect((self.router_ip, self.router_port))
+            # Crear socket
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.connect((self.router_ip, self.router_port))
             self.log(f"✓ Conexión establecida con Router", "SUCCESS")
             
-            # Enviar mensaje de identificación como conexión persistente
+            # Crear NodeConnection con callback para mensajes
+            self.router_connection = NodeConnection(
+                node_type='router',
+                ip=self.router_ip,
+                port=self.router_port,
+                on_message_callback=self._handle_message,
+                sender_node_type='client',
+                sender_id=self.client_id
+            )
+            
+            # Conectar usando el socket existente
+            if not self.router_connection.connect(existing_socket=sock):
+                raise Exception("No se pudo establecer NodeConnection")
+            
+            self.log(f"✓ NodeConnection establecida con Router", "SUCCESS")
+            
+            # Enviar mensaje de identificación
             identification_msg = {
                 'type': MessageProtocol.MESSAGE_TYPES['IDENTIFICATION'],
                 'sender_id': self.client_id,
@@ -205,17 +220,10 @@ class InteractiveClient:
                 }
             }
             
-            with self.socket_lock:
-                msg_bytes = json.dumps(identification_msg).encode()
-                self.router_socket.send(len(msg_bytes).to_bytes(2, 'big'))
-                self.router_socket.send(msg_bytes)
-            
+            self.router_connection.send_message(identification_msg)
             self.log(f"✓ Identificación enviada como '{self.client_id}'", "SUCCESS")
             
-            # Iniciar threads de recepción y heartbeat
-            self.receive_thread = threading.Thread(target=self._receive_messages, daemon=True)
-            self.receive_thread.start()
-            
+            # Iniciar thread de heartbeat
             self.heartbeat_thread = threading.Thread(target=self._send_heartbeats, daemon=True)
             self.heartbeat_thread.start()
             
@@ -223,73 +231,25 @@ class InteractiveClient:
             
         except Exception as e:
             self.log(f"✗ Error estableciendo conexión persistente: {e}", "ERROR")
-            if self.router_socket:
+            if self.router_connection:
                 try:
-                    self.router_socket.close()
+                    self.router_connection.close()
                 except:
                     pass
-                self.router_socket = None
+                self.router_connection = None
             return False
     
-    def _receive_messages(self):
-        """Thread que recibe mensajes del Router"""
-        self.log("📥 Iniciando recepción de mensajes...")
-        
-        while self.running and self.router_socket:
-            try:
-                # Leer longitud del mensaje (2 bytes)
-                with self.socket_lock:
-                    if not self.router_socket:
-                        break
-                    self.router_socket.settimeout(1.0)
-                    try:
-                        length_bytes = self.router_socket.recv(2)
-                    except socket.timeout:
-                        continue
-                
-                if not length_bytes:
-                    self.log("Conexión cerrada por el Router", "WARNING")
-                    break
-                
-                length = int.from_bytes(length_bytes, 'big')
-                
-                # Leer mensaje completo
-                message_bytes = b''
-                while len(message_bytes) < length:
-                    with self.socket_lock:
-                        if not self.router_socket:
-                            break
-                        chunk = self.router_socket.recv(length - len(message_bytes))
-                    if not chunk:
-                        break
-                    message_bytes += chunk
-                
-                if len(message_bytes) != length:
-                    self.log("Mensaje incompleto recibido", "WARNING")
-                    continue
-                
-                # Parsear mensaje
-                message = json.loads(message_bytes.decode())
-                self._handle_message(message)
-                
-            except socket.timeout:
-                continue
-            except Exception as e:
-                if self.running:
-                    self.log(f"Error recibiendo mensaje: {e}", "ERROR")
-                break
-        
-        self.log("📥 Recepción de mensajes finalizada", "INFO")
+
     
     def _send_heartbeats(self):
         """Thread que envía heartbeats periódicos al Router"""
         self.log("💓 Iniciando envío de heartbeats...")
         
-        while self.running and self.router_socket:
+        while self.running and self.router_connection and self.router_connection.connected:
             try:
                 time.sleep(5)  # Heartbeat cada 5 segundos
                 
-                if not self.router_socket:
+                if not self.router_connection or not self.router_connection.connected:
                     break
                 
                 # Crear mensaje de heartbeat
@@ -300,13 +260,8 @@ class InteractiveClient:
                     'data': {}
                 }
                 
-                # Enviar heartbeat
-                with self.socket_lock:
-                    if not self.router_socket:
-                        break
-                    msg_bytes = json.dumps(heartbeat_msg).encode()
-                    self.router_socket.send(len(msg_bytes).to_bytes(2, 'big'))
-                    self.router_socket.send(msg_bytes)
+                # Enviar heartbeat usando NodeConnection
+                self.router_connection.send_message(heartbeat_msg)
                 
             except Exception as e:
                 if self.running:
@@ -315,7 +270,7 @@ class InteractiveClient:
         
         self.log("💓 Envío de heartbeats finalizado", "INFO")
     
-    def _handle_message(self, message):
+    def _handle_message(self, node_connection, message):
         """Maneja mensajes recibidos del Router"""
         msg_type = message.get('type')
         data = message.get('data', {})
@@ -376,7 +331,7 @@ class InteractiveClient:
     
     def send_scrape_request(self, url):
         """Envía petición de scrapping"""
-        if not self.router_socket:
+        if not self.router_connection or not self.router_connection.connected:
             self.log("No conectado al Router", "ERROR")
             return None
         
@@ -393,10 +348,7 @@ class InteractiveClient:
         }
         
         try:
-            with self.socket_lock:
-                message_bytes = json.dumps(message).encode()
-                self.router_socket.send(len(message_bytes).to_bytes(2, 'big'))
-                self.router_socket.send(message_bytes)
+            self.router_connection.send_message(message)
             
             self.pending_requests[task_id] = {
                 'url': url,
@@ -413,7 +365,7 @@ class InteractiveClient:
     
     def send_status_request(self):
         """Solicita estado del sistema"""
-        if not self.router_socket:
+        if not self.router_connection or not self.router_connection.connected:
             self.log("No conectado al Router", "ERROR")
             return False
         
@@ -425,11 +377,7 @@ class InteractiveClient:
         }
         
         try:
-            with self.socket_lock:
-                message_bytes = json.dumps(message).encode()
-                self.router_socket.send(len(message_bytes).to_bytes(2, 'big'))
-                self.router_socket.send(message_bytes)
-            
+            self.router_connection.send_message(message)
             self.log("📤 Solicitando estado del sistema...", "INFO")
             return True
             
@@ -552,19 +500,15 @@ class InteractiveClient:
         """Limpia recursos"""
         self.running = False
         
-        # Cerrar socket
-        if self.router_socket:
+        # Cerrar conexión
+        if self.router_connection:
             try:
-                with self.socket_lock:
-                    self.router_socket.close()
-                    self.router_socket = None
+                self.router_connection.close()
+                self.router_connection = None
             except:
                 pass
         
-        # Esperar threads
-        if self.receive_thread and self.receive_thread.is_alive():
-            self.receive_thread.join(timeout=2)
-        
+        # Esperar thread de heartbeat
         if self.heartbeat_thread and self.heartbeat_thread.is_alive():
             self.heartbeat_thread.join(timeout=2)
         
