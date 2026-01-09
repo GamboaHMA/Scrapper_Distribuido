@@ -8,7 +8,7 @@ import queue
 # Importar funciones de scrapping
 from .scrapper import get_html_from_url
 # Importar utilidades compartidas
-from base_node.utils import NodeConnection, MessageProtocol
+from base_node.utils import NodeConnection, MessageProtocol, BossProfile
 
 
 # Por defecto INFO, pero se puede cambiar con LOG_LEVEL=DEBUG
@@ -157,6 +157,11 @@ class ScrapperNode(Node):
         
         # Registrar handlers específicos de scrapper
         self._register_scrapper_handlers()
+
+        self.external_bosses = {
+            'bd': BossProfile('bd', bd_port),
+            'router': BossProfile('router', router_port)
+        }
     
     def _register_scrapper_handlers(self):
         """Registra handlers específicos para mensajes de scrapper"""
@@ -200,44 +205,6 @@ class ScrapperNode(Node):
             # Intentar asignar las tareas devueltas
             self._try_assign_pending_tasks()
         return reassigned
-    
-    def start_boss_tasks(self):
-        """
-        Override: Inicia tareas específicas del jefe scrapper.
-        - Conecta con BD y Router jefes
-        - Inicia hilo de asignación de tareas
-        """
-        if not self.i_am_boss:
-            return
-        
-        logging.info("🔧 Iniciando tareas de jefe scrapper...")
-        
-        # 1. Descubrir y conectar con jefe de BD
-        # logging.info("Buscando jefe de BD...")
-        # bd_ips = self.discover_nodes('bd', self.bd_port)
-        # if bd_ips:
-        #     bd_boss_found = self.broadcast_identification('bd')
-        #     if bd_boss_found:
-        #         logging.info("✓ Conectado a jefe de BD")
-        #     else:
-        #         logging.warning("✗ No se encontró jefe de BD")
-        # else:
-        #     logging.warning("No se encontraron nodos BD en la red")
-        
-        # 2. Descubrir y conectar con jefe de Router
-        # logging.info("Buscando jefe de Router...")
-        # router_ips = self.discover_nodes('router', self.router_port)
-        # if router_ips:
-        #     router_boss_found = self.broadcast_identification('router')
-        #     if router_boss_found:
-        #         logging.info("✓ Conectado a jefe de Router")
-        #     else:
-        #         logging.warning("✗ No se encontró jefe de Router")
-        # else:
-        #     logging.warning("No se encontraron nodos Router en la red")
-        
-        # 3. Iniciar hilo de asignación de tareas
-        self._start_task_assignment_thread()
     
     # ============= HANDLERS ESPECÍFICOS DE SCRAPPER =============
     
@@ -515,11 +482,13 @@ class ScrapperNode(Node):
     
     def _send_result_to_database(self, task_id, result):
         """Envía resultado al jefe de BD"""
-        bd_conn = self.bosses_connections.get('bd')
+        bd_profile = self.external_bosses.get('bd')
         
-        if not bd_conn or not bd_conn.is_connected():
+        if not bd_profile or not bd_profile.is_connected():
             logging.warning(f"No hay conexión con BD para enviar resultado de tarea {task_id}")
             return
+        
+        bd_conn = bd_profile.connection
         
         save_msg = self._create_message(
             MessageProtocol.MESSAGE_TYPES['SAVE_DATA'],
@@ -536,14 +505,14 @@ class ScrapperNode(Node):
             logging.error(f"No se pudo enviar resultado de tarea {task_id} a BD")
     
     def _notify_router_task_completed(self, task_id, result):
-        """Notifica al router que una tarea fue completada con su resultado"""
-        router_conn = self.bosses_connections.get('router')
+        """Notifica al router que una tarea fue completada"""
+        router_profile = self.external_bosses.get('router')
         
-        if not router_conn or not router_conn.is_connected():
+        if not router_profile or not router_profile.is_connected():
             logging.warning(f"No hay conexión con Router para notificar tarea {task_id}")
             return
         
-        logging.debug(f"_notify_router_task_completed - task_id={task_id}, result={result}")
+        router_conn = router_profile.connection
         
         completion_msg = self._create_message(
             MessageProtocol.MESSAGE_TYPES['TASK_RESULT'],
@@ -587,6 +556,169 @@ class ScrapperNode(Node):
                     
             except Exception as e:
                 logging.error(f"Error en loop de asignación de tareas: {e}")
+
+    #============= PARA DESCUBRIR A LOS OTROS JEFES ==============
+
+    def _connect_to_external_bosses(self):
+        """Conecta con los jefes de BD y Router"""
+        logging.info("Conectando con jefes externos (BD y Router)...")
+        
+        for node_type in self.external_bosses.keys():
+            threading.Thread(
+                target=self._periodic_boss_search,
+                args=(node_type,),
+                daemon=True
+            ).start()
+
+    def _periodic_boss_search(self, node_type):
+        """
+        Busca periódicamente al jefe de un tipo de nodo hasta encontrarlo.
+        Una vez conectado, detiene la búsqueda.
+        
+        Args:
+            node_type: Tipo de nodo a buscar ('bd' o 'router')
+        """
+
+        retry_interval = 5  # segundos entre intentos
+        boss_profile = self.external_bosses[node_type]
+
+        logging.info(f"Iniciando busqueda periodica del jefe {node_type}...")
+
+        while self.running:
+            # Si ya estamos conectados, detener búsqueda
+            if not boss_profile.is_connected():
+                #logging.debug(f"Jefe {node_type} ya conectado, deteniendo búsqueda")
+                #break
+            
+                # Intentar descubrir nodos
+                node_ips = self.discover_nodes(node_type, boss_profile.port)
+            
+                if node_ips:
+                    # Buscar el jefe en la lista
+                    boss_ip = self._find_boss_in_list(node_ips, node_type)
+                
+                    if boss_ip:
+                        logging.info(f"Jefe {node_type} encontrado en {boss_ip}")
+                        self._connect_to_boss(node_type, boss_ip)
+                    
+                        # Verificar que la conexión fue exitosa
+                        if boss_profile.is_connected():
+                            logging.info(f"✓ Conexión con jefe {node_type} establecida")
+                            
+                    else:
+                        logging.debug(f"Nodos {node_type} encontrados pero ninguno es jefe")
+                else:
+                    logging.debug(f"No se encontraron nodos {node_type} en el DNS")
+            
+            logging.info(f"Búsqueda periódica de jefe {node_type} finalizada")
+            # Esperar antes del siguiente intento
+            time.sleep(retry_interval)
+        
+    def _find_boss_in_list(self, ip_list, node_type):
+        """
+        Encuentra el jefe en una lista de IPs consultando temporalmente.
+        
+        Args:
+            ip_list: Lista de IPs a consultar
+            node_type: Tipo de nodo ('bd', 'scrapper')
+        
+        Returns:
+            str: IP del jefe o None
+        """
+        boss_profile = self.external_bosses[node_type]
+        
+        for ip in ip_list:
+            if ip == self.ip:
+                continue
+            
+            # Enviar identificación temporal
+            msg = self._create_message(
+                MessageProtocol.MESSAGE_TYPES['IDENTIFICATION'],
+                {'is_temporary': True}
+            )
+            
+            response = self.send_temporary_message(
+                ip, 
+                boss_profile.port, 
+                msg, 
+                expect_response=True,
+                # timeout=5.0,
+                node_type=node_type
+            )
+            if response:
+                is_boss = response.get('data', {}).get('is_boss', False)
+                if is_boss:
+                    return ip
+        
+        return None
+
+    def _connect_to_boss(self, node_type, boss_ip):
+        """
+        Conecta con el jefe de un tipo de nodo específico.
+        
+        Args:
+            node_type: Tipo de nodo ('bd' o 'scrapper')
+            boss_ip: IP del jefe
+        """
+        boss_profile = self.external_bosses[node_type]
+        
+        # Verificar si ya existe conexión (is_connected() tiene su propio lock)
+        if boss_profile.is_connected():
+            logging.warning(f"Ya existe conexión con jefe {node_type}")
+            return
+        
+        # Crear nueva conexión
+        new_connection = NodeConnection(
+            node_type,
+            boss_ip,
+            boss_profile.port,
+            on_message_callback=self._handle_message_from_node,
+            sender_node_type=self.node_type,
+            sender_id=self.node_id
+        )
+        
+        if new_connection.connect():
+            logging.info(f"Conectado con jefe {node_type} en {boss_ip}")
+            
+            # Enviar identificación inicial (NO temporal, es conexión persistente)
+            identification = self._create_message(
+                MessageProtocol.MESSAGE_TYPES['IDENTIFICATION'],
+                {
+                    'ip': self.ip,
+                    'port': self.port,
+                    'is_boss': self.i_am_boss,
+                    'is_temporary': False
+                }
+            )
+            new_connection.send_message(identification)
+            
+            # Actualizar perfil (set_connection ya tiene su propio lock)
+            boss_profile.set_connection(new_connection)
+            
+            # Iniciar heartbeats
+            threading.Thread(
+                target=self._heartbeat_loop,
+                args=(new_connection,),
+                daemon=True
+            ).start()
+        else:
+            logging.error(f"No se pudo conectar con jefe {node_type} en {boss_ip}")
+            boss_profile.clear_connection()
+
+    def start_boss_tasks(self):
+        """
+        Tareas específicas del jefe Scrapper.
+        Override del método base.
+        """
+        logging.info("=== INICIANDO TAREAS DEL JEFE SCRAPPER ===")
+        
+        # Conectar con jefes externos
+        self._connect_to_external_bosses()
+        self._start_task_assignment_thread()
+        logging.info("✓ Jefe Scrapper operativo")
+
+
+
 
 
 # ============= FUNCIÓN MAIN =============

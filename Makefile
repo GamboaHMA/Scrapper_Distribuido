@@ -4,6 +4,7 @@
 NETWORK_NAME = scrapper-network
 SCRAPPER_NODE_IMAGE = scrapper_node
 ROUTER_NODE_IMAGE = router_node
+DATABASE_NODE_IMAGE = database_node
 CLIENT_IMAGE = interactive_client
 
 # Colores
@@ -74,6 +75,11 @@ build-router: ## Construir imagen de RouterNode
 	docker build -t $(ROUTER_NODE_IMAGE) -f router/Dockerfile .
 	@echo "$(GREEN)✅ RouterNode construido$(NC)"
 
+build-database: ## Construir imagen de DatabaseNode
+	@echo "$(YELLOW)Construyendo DatabaseNode...$(NC)"
+	docker build -t $(DATABASE_NODE_IMAGE) -f database/Dockerfile .
+	@echo "$(GREEN)✅ DatabaseNode construido$(NC)"
+
 build-client: ## Construir imagen del Cliente
 	@echo "$(YELLOW)Construyendo Cliente...$(NC)"
 	docker build -t $(CLIENT_IMAGE) -f client/Dockerfile .
@@ -84,7 +90,7 @@ build-streamlit: ## Construir imagen de Streamlit UI
 	docker build -t streamlit-app -f streamlit_app/Dockerfile .
 	@echo "$(GREEN)✅ Streamlit UI construido$(NC)"
 
-build-all: build-scrapper build-router build-client build-streamlit ## Construir todas las imágenes
+build-all: build-scrapper build-router build-database build-client build-streamlit ## Construir todas las imágenes
 	@echo "$(GREEN)╔════════════════════════════════════════════════════════════════╗$(NC)"
 	@echo "$(GREEN)║  ✅ Todas las imágenes han sido construidas exitosamente       ║$(NC)"
 	@echo "$(GREEN)╚════════════════════════════════════════════════════════════════╝$(NC)"
@@ -93,7 +99,42 @@ build-all: build-scrapper build-router build-client build-streamlit ## Construir
 # RUN - EJECUTAR NODOS
 # =============================================================================
 
+run-scrapper: network ## Ejecutar 1 ScrapperNode
+	@echo "$(YELLOW)Iniciando 1 ScrapperNode...$(NC)"
+	@NEXT_NUM=$$(docker ps -a --filter name=scrapper-node --format "{{.Names}}" | \
+		sed 's/scrapper-node-//' | sort -n | tail -1); \
+	NEXT_NUM=$$((NEXT_NUM + 1)); \
+	docker run -d --name scrapper-node-$$NEXT_NUM \
+		--network $(NETWORK_NAME) \
+		--network-alias scrapper \
+		-e LOG_LEVEL=INFO \
+		$(SCRAPPER_NODE_IMAGE); \
+	echo "$(GREEN)✅ ScrapperNode $$NEXT_NUM iniciado$(NC)"
+
 run-scrappers: network ## Ejecutar 4 ScrapperNodes (por defecto)
+	@echo "$(YELLOW)Iniciando 4 ScrapperNodes...$(NC)"
+	@for i in 1 2 3 4; do \
+		docker run -d --name scrapper-node-$$i \
+			--network $(NETWORK_NAME) \
+			--network-alias scrapper \
+			-e LOG_LEVEL=INFO \
+			$(SCRAPPER_NODE_IMAGE); \
+		echo "$(GREEN)✅ ScrapperNode $$i iniciado$(NC)"; \
+	done
+
+run-router: network ## Ejecutar 1 RouterNode
+	@echo "$(YELLOW)Iniciando 1 RouterNode...$(NC)"
+	@NEXT_NUM=$$(docker ps -a --filter name=router-node --format "{{.Names}}" | \
+		sed 's/router-node-//' | sort -n | tail -1); \
+	NEXT_NUM=$$((NEXT_NUM + 1)); \
+	docker run -d --name router-node-$$NEXT_NUM \
+		--network $(NETWORK_NAME) \
+		--network-alias router \
+		-e LOG_LEVEL=INFO \
+		$(ROUTER_NODE_IMAGE); \
+	echo "$(GREEN)✅ RouterNode $$NEXT_NUM iniciado$(NC)"
+
+run-routers: network ## Ejecutar 4 RouterNodes (por defecto)
 	@echo "$(YELLOW)Iniciando 4 ScrapperNodes...$(NC)"
 	@for i in 1 2 3 4; do \
 		docker run -d --name scrapper-node-$$i \
@@ -113,6 +154,31 @@ run-routers: network ## Ejecutar 4 RouterNodes (por defecto)
 			-e LOG_LEVEL=INFO \
 			$(ROUTER_NODE_IMAGE); \
 		echo "$(GREEN)✅ RouterNode $$i iniciado$(NC)"; \
+	done
+
+run-database: network ## Ejecutar 1 DatabaseNode
+	@echo "$(YELLOW)Iniciando 1 DatabaseNode...$(NC)"
+	@NEXT_NUM=$$(docker ps -a --filter name=database-node --format "{{.Names}}" | \
+		sed 's/database-node-//' | sort -n | tail -1); \
+	NEXT_NUM=$$((NEXT_NUM + 1)); \
+	docker run -d --name database-node-$$NEXT_NUM \
+		--network $(NETWORK_NAME) \
+		--network-alias bd \
+		-e LOG_LEVEL=INFO \
+		-v database-data-$$NEXT_NUM:/app/database \
+		$(DATABASE_NODE_IMAGE); \
+	echo "$(GREEN)✅ DatabaseNode $$NEXT_NUM iniciado$(NC)"
+
+run-databases: network ## Ejecutar 3 DatabaseNodes (por defecto)
+	@echo "$(YELLOW)Iniciando 3 DatabaseNodes...$(NC)"
+	@for i in 1 2 3; do \
+		docker run -d --name database-node-$$i \
+			--network $(NETWORK_NAME) \
+			--network-alias bd \
+			-e LOG_LEVEL=INFO \
+			-v database-data-$$i:/app/database \
+			$(DATABASE_NODE_IMAGE); \
+		echo "$(GREEN)✅ DatabaseNode $$i iniciado$(NC)"; \
 	done
 
 run-client: network ## Ejecutar 1 Cliente interactivo
@@ -136,11 +202,12 @@ run-streamlit: network ## Ejecutar interfaz Streamlit (accesible en http://local
 	@echo "$(GREEN)✅ Streamlit UI iniciado$(NC)"
 	@echo "$(YELLOW)Accede a la interfaz en:$(NC) http://localhost:8501"
 
-run-all: network run-scrappers run-routers run-client run-streamlit ## Ejecutar todo el sistema (4 scrappers, 4 routers, 1 cliente, UI)
+run-all: network run-scrappers run-routers run-databases run-client run-streamlit ## Ejecutar todo el sistema (4 scrappers, 4 routers, 3 databases, 1 cliente, UI)
 	@echo "$(GREEN)╔════════════════════════════════════════════════════════════════╗$(NC)"
 	@echo "$(GREEN)║  ✅ Sistema completo desplegado:                               ║$(NC)"
 	@echo "$(GREEN)║     - 4 ScrapperNodes                                          ║$(NC)"
 	@echo "$(GREEN)║     - 4 RouterNodes                                            ║$(NC)"
+	@echo "$(GREEN)║     - 3 DatabaseNodes                                          ║$(NC)"
 	@echo "$(GREEN)║     - 1 Cliente                                                ║$(NC)"
 	@echo "$(GREEN)║     - 1 Streamlit UI                                           ║$(NC)"
 	@echo "$(GREEN)╚════════════════════════════════════════════════════════════════╝$(NC)"
@@ -163,6 +230,12 @@ clean-routers: ## Detener y eliminar todos los RouterNodes
 	-docker rm $$(docker ps -aq --filter name=router-node) 2>/dev/null
 	@echo "$(GREEN)✅ RouterNodes limpiados$(NC)"
 
+clean-databases: ## Detener y eliminar todos los DatabaseNodes
+	@echo "$(YELLOW)Limpiando DatabaseNodes...$(NC)"
+	-docker stop $$(docker ps -aq --filter name=database-node) 2>/dev/null
+	-docker rm $$(docker ps -aq --filter name=database-node) 2>/dev/null
+	@echo "$(GREEN)✅ DatabaseNodes limpiados$(NC)"
+
 clean-clients: ## Detener y eliminar todos los Clientes
 	@echo "$(YELLOW)Limpiando Clientes...$(NC)"
 	-docker stop $$(docker ps -aq --filter name=client) 2>/dev/null
@@ -175,7 +248,7 @@ clean-streamlit: ## Detener y eliminar Streamlit UI
 	-docker rm streamlit-app 2>/dev/null
 	@echo "$(GREEN)✅ Streamlit UI limpiado$(NC)"
 
-clean-all: clean-scrappers clean-routers clean-clients clean-streamlit ## Limpiar todos los contenedores
+clean-all: clean-scrappers clean-routers clean-databases clean-clients clean-streamlit ## Limpiar todos los contenedores
 	@echo "$(GREEN)╔════════════════════════════════════════════════════════════════╗$(NC)"
 	@echo "$(GREEN)║  ✅ Todos los contenedores han sido limpiados                 ║$(NC)"
 	@echo "$(GREEN)╚════════════════════════════════════════════════════════════════╝$(NC)"
@@ -200,6 +273,15 @@ logs-router: ## Ver logs del primer RouterNode
 		docker logs -f $$CONTAINER; \
 	else \
 		echo "$(RED)No hay RouterNodes en ejecución$(NC)"; \
+	fi
+
+logs-database: ## Ver logs del primer DatabaseNode
+	@CONTAINER=$$(docker ps --filter name=database-node --format "{{.Names}}" | head -1); \
+	if [ -n "$$CONTAINER" ]; then \
+		echo "$(GREEN)Logs de $$CONTAINER:$(NC)"; \
+		docker logs -f $$CONTAINER; \
+	else \
+		echo "$(RED)No hay DatabaseNodes en ejecución$(NC)"; \
 	fi
 
 logs-client: ## Ver logs del primer Cliente
