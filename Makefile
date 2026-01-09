@@ -79,9 +79,14 @@ build-client: ## Construir imagen del Cliente
 	docker build -t $(CLIENT_IMAGE) -f client/Dockerfile .
 	@echo "$(GREEN)✅ Cliente construido$(NC)"
 
-build-all: build-scrapper build-router build-client ## Construir todas las imágenes
+build-streamlit: ## Construir imagen de Streamlit UI
+	@echo "$(YELLOW)Construyendo Interfaz Streamlit...$(NC)"
+	docker build -t streamlit-app -f streamlit_app/Dockerfile .
+	@echo "$(GREEN)✅ Streamlit UI construido$(NC)"
+
+build-all: build-scrapper build-router build-client build-streamlit ## Construir todas las imágenes
 	@echo "$(GREEN)╔════════════════════════════════════════════════════════════════╗$(NC)"
-	@echo "$(GREEN)║  ✅ Todas las imágenes han sido construidas exitosamente     ║$(NC)"
+	@echo "$(GREEN)║  ✅ Todas las imágenes han sido construidas exitosamente       ║$(NC)"
 	@echo "$(GREEN)╚════════════════════════════════════════════════════════════════╝$(NC)"
 
 # =============================================================================
@@ -120,15 +125,27 @@ run-client: network ## Ejecutar 1 Cliente interactivo
 	@echo "$(YELLOW)Para usar el cliente ejecuta:$(NC)"
 	@echo "  docker exec -it client-1 python /app/client/interactive_client_v2.py"
 
-run-all: network run-scrappers run-routers run-client ## Ejecutar todo el sistema (4 scrappers, 4 routers, 1 cliente)
+run-streamlit: network ## Ejecutar interfaz Streamlit (accesible en http://localhost:8501)
+	@echo "$(YELLOW)Iniciando interfaz Streamlit...$(NC)"
+	docker run -d --name streamlit-app \
+		--network $(NETWORK_NAME) \
+		-p 8501:8501 \
+		-e ROUTER_IP=router-node \
+		-e ROUTER_PORT=7070 \
+		streamlit-app
+	@echo "$(GREEN)✅ Streamlit UI iniciado$(NC)"
+	@echo "$(YELLOW)Accede a la interfaz en:$(NC) http://localhost:8501"
+
+run-all: network run-scrappers run-routers run-client run-streamlit ## Ejecutar todo el sistema (4 scrappers, 4 routers, 1 cliente, UI)
 	@echo "$(GREEN)╔════════════════════════════════════════════════════════════════╗$(NC)"
 	@echo "$(GREEN)║  ✅ Sistema completo desplegado:                               ║$(NC)"
 	@echo "$(GREEN)║     - 4 ScrapperNodes                                          ║$(NC)"
 	@echo "$(GREEN)║     - 4 RouterNodes                                            ║$(NC)"
 	@echo "$(GREEN)║     - 1 Cliente                                                ║$(NC)"
+	@echo "$(GREEN)║     - 1 Streamlit UI                                           ║$(NC)"
 	@echo "$(GREEN)╚════════════════════════════════════════════════════════════════╝$(NC)"
-	@echo "$(YELLOW)Para usar el cliente:$(NC)"
-	@echo "  docker exec -it client-1 python /app/client/interactive_client_v2.py"
+	@echo "$(YELLOW)Interfaz web:$(NC) http://localhost:8501"
+	@echo "$(YELLOW)Para cliente CLI:$(NC) docker exec -it client-1 python /app/client/interactive_client_v2.py"
 
 # =============================================================================
 # CLEAN - LIMPIEZA
@@ -152,7 +169,13 @@ clean-clients: ## Detener y eliminar todos los Clientes
 	-docker rm $$(docker ps -aq --filter name=client) 2>/dev/null
 	@echo "$(GREEN)✅ Clientes limpiados$(NC)"
 
-clean-all: clean-scrappers clean-routers clean-clients ## Limpiar todos los contenedores
+clean-streamlit: ## Detener y eliminar Streamlit UI
+	@echo "$(YELLOW)Limpiando Streamlit UI...$(NC)"
+	-docker stop streamlit-app 2>/dev/null
+	-docker rm streamlit-app 2>/dev/null
+	@echo "$(GREEN)✅ Streamlit UI limpiado$(NC)"
+
+clean-all: clean-scrappers clean-routers clean-clients clean-streamlit ## Limpiar todos los contenedores
 	@echo "$(GREEN)╔════════════════════════════════════════════════════════════════╗$(NC)"
 	@echo "$(GREEN)║  ✅ Todos los contenedores han sido limpiados                 ║$(NC)"
 	@echo "$(GREEN)╚════════════════════════════════════════════════════════════════╝$(NC)"
@@ -186,6 +209,14 @@ logs-client: ## Ver logs del primer Cliente
 		docker logs -f $$CONTAINER; \
 	else \
 		echo "$(RED)No hay Clientes en ejecución$(NC)"; \
+	fi
+
+logs-streamlit: ## Ver logs de Streamlit UI
+	@if docker ps --filter name=streamlit-app --format "{{.Names}}" | grep -q streamlit-app; then \
+		echo "$(GREEN)Logs de streamlit-app:$(NC)"; \
+		docker logs -f streamlit-app; \
+	else \
+		echo "$(RED)Streamlit UI no está en ejecución$(NC)"; \
 	fi
 
 exec-client: ## Conectar al primer cliente disponible
