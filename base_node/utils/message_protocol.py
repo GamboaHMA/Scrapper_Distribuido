@@ -36,6 +36,8 @@ class MessageProtocol:
         'BD_QUERY': 'bd_query',
         'BD_QUERY_RESPONSE': 'bd_query_response',
         'SCRAPPER_RESULT': 'scrapper_result',
+        'STATUS_REQUEST': 'status_request',
+        'STATUS_RESPONSE': 'status_response',
         
         # REPLICATION (Jefe -> Subordinados)
         'EXTERNAL_BOSSES_INFO': 'external_bosses_info',
@@ -45,14 +47,8 @@ class MessageProtocol:
         
         # DATABASE COMMUNICATION
         'SAVE_DATA': 'save_data',
-        'SAVE_DATE_NO_LEADER': 'save_data_no_leader',
         'SAVE_CONFIRMATION': 'save_confirmation',
-        'URL_QUERY': 'url_query',
-
-        # CLIENT COMUNICATION
-        'GET_SUBORDINATES': 'get_subordinates',
-        'P2P_REQUEST': 'p2p_request',
-        'GET_ROUTER_LEADER': 'get_router_leader'
+        'URL_QUERY': 'url_query'
     }
 
     @staticmethod

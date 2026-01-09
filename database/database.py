@@ -54,7 +54,7 @@ class DatabaseNode(Node):
 
         # Perfiles de jefes externos
         self.external_bosses = {
-            'bd': BossProfile('router', router_port),
+            'router': BossProfile('router', router_port),
             'scrapper': BossProfile('scrapper', scrapper_port)
         }
 
