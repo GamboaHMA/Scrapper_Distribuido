@@ -49,6 +49,9 @@ class MessageProtocol:
         # DATABASE COMMUNICATION
         'SAVE_DATA': 'save_data',
         'SAVE_DATA_NO_LEADER': 'save_data_no_leader',
+        'REPLICATE_CONTENT': 'replicate_content',  # Líder solicita que un subordinado replique a otros
+        'REQUEST_URL_INVENTORY': 'request_url_inventory',  # Nuevo jefe pide inventario de URLs a subordinados
+        'REPORT_URL_INVENTORY': 'report_url_inventory',  # Subordinados reportan sus URLs al nuevo jefe
         'SAVE_CONFIRMATION': 'save_confirmation'
     }
 

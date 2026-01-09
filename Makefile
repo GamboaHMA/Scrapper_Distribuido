@@ -236,6 +236,11 @@ clean-databases: ## Detener y eliminar todos los DatabaseNodes
 	-docker rm $$(docker ps -aq --filter name=database-node) 2>/dev/null
 	@echo "$(GREEN)✅ DatabaseNodes limpiados$(NC)"
 
+clean-datasets: ## Eliminar todos los volúmenes de datos de DatabaseNodes
+	@echo "$(YELLOW)Eliminando volúmenes database-data...$(NC)"
+	-docker volume rm $$(docker volume ls -q --filter name=database-data) 2>/dev/null || echo "$(GREEN)No hay volúmenes database-data$(NC)"
+	@echo "$(GREEN)✅ Volúmenes eliminados$(NC)"
+
 clean-clients: ## Detener y eliminar todos los Clientes
 	@echo "$(YELLOW)Limpiando Clientes...$(NC)"
 	-docker stop $$(docker ps -aq --filter name=client) 2>/dev/null
