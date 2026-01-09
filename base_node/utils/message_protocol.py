@@ -35,6 +35,7 @@ class MessageProtocol:
         'CLIENT_REQUEST': 'client_request',
         'BD_QUERY': 'bd_query',
         'BD_QUERY_RESPONSE': 'bd_query_response',
+        'URL_QUERY': 'url_query',  # Query de BD no-líder
         'SCRAPPER_RESULT': 'scrapper_result',
         'STATUS_REQUEST': 'status_request',
         'STATUS_RESPONSE': 'status_response',
@@ -47,6 +48,7 @@ class MessageProtocol:
         
         # DATABASE COMMUNICATION
         'SAVE_DATA': 'save_data',
+        'SAVE_DATA_NO_LEADER': 'save_data_no_leader',
         'SAVE_CONFIRMATION': 'save_confirmation'
     }
 

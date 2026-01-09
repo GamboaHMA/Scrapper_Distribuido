@@ -8,6 +8,7 @@ import os
 import logging
 import threading
 import time
+import random
 from datetime import datetime
 from base_node.node import Node
 from base_node.utils import MessageProtocol, NodeConnection, BossProfile
@@ -51,6 +52,7 @@ class DatabaseNode(Node):
         #envio de mensajes
         self.message_queue = queue.Queue()
         self.stop_event = threading.Event()
+        self.status_lock = threading.Lock()
 
         # Perfiles de jefes externos
         self.external_bosses = {
@@ -78,20 +80,28 @@ class DatabaseNode(Node):
     def _register_bd_handlers(self):
         '''Registrar handlers para mensajes especificos de bd'''
         
-        # Handler para query de url que le manda el scrapper (conexion persistente)
+        # Handler para query de url que le manda el Router (conexion persistente)
         self.add_persistent_message_handler(
             MessageProtocol.MESSAGE_TYPES['BD_QUERY'],
             self._url_query_leader
         )
 
+        # Handler para query de url entre nodos BD (líder -> subordinado)
         self.add_persistent_message_handler(
             MessageProtocol.MESSAGE_TYPES['URL_QUERY'],
             self._url_query_noleader
         )
 
+        # Handler para guardar datos desde Scrapper (solo líder)
         self.add_persistent_message_handler(
             MessageProtocol.MESSAGE_TYPES['SAVE_DATA'],
             self._recive_task_result
+        )
+
+        # Handler para guardar datos desde líder BD (solo subordinados)
+        self.add_persistent_message_handler(
+            MessageProtocol.MESSAGE_TYPES['SAVE_DATA_NO_LEADER'],
+            self._recive_task_result_no_leader
         )
 
     def init_database(self):
@@ -177,208 +187,342 @@ class DatabaseNode(Node):
         except Exception as e:
             logging.error(f"Error inicilizando la base de datos: {e}")
 
-    def _url_query_leader(self, message):
+    def _register_url_in_subordinates(self, url, node_ids):
+        '''Registra en las tablas de log que ciertos subordinados tienen el contenido de una URL'''
+        try:
+            # Insertar URL en tabla urls si no existe
+            self.db_cursor.execute('INSERT OR IGNORE INTO urls (url) VALUES (?)', (url,))
+            self.db_conn.commit()
+
+            # Obtener url_id
+            self.db_cursor.execute('SELECT url_id FROM urls WHERE url = ?', (url,))
+            url_id_row = self.db_cursor.fetchone()
+            if not url_id_row:
+                raise Exception(f"No se pudo obtener url_id para {url}")
+            url_id = url_id_row[0]
+
+            # Registrar en url_db_log cada subordinado que tiene el contenido
+            for node_id in node_ids:
+                # Buscar o crear database_id para este node_id
+                self.db_cursor.execute('SELECT database_id FROM databases WHERE node_id = ?', (node_id,))
+                db_row = self.db_cursor.fetchone()
+                
+                if not db_row:
+                    # Crear entrada para este subordinado si no existe
+                    self.db_cursor.execute('INSERT INTO databases (node_id) VALUES (?)', (node_id,))
+                    self.db_conn.commit()
+                    database_id = self.db_cursor.lastrowid
+                else:
+                    database_id = db_row[0]
+
+                # Registrar que este subordinado tiene la URL
+                self.db_cursor.execute('''
+                    INSERT OR IGNORE INTO url_db_log (url_id, database_id)
+                    VALUES (?, ?)
+                ''', (url_id, database_id))
+            
+            self.db_conn.commit()
+
+            # Actualizar contador de réplicas
+            self.db_cursor.execute('''
+                INSERT INTO urls_replicas (url_id, current_replicas, target_replicas)
+                VALUES (?, ?, 3)
+                ON CONFLICT(url_id) DO UPDATE SET current_replicas = ?
+            ''', (url_id, len(node_ids), len(node_ids)))
+            self.db_conn.commit()
+
+            logging.info(f"Líder BD registró URL {url} en {len(node_ids)} subordinados: {node_ids}")
+        
+        except Exception as e:
+            logging.error(f"Error registrando URL en logs: {e}")
+            raise
+
+    def _url_query_leader(self, node_connection, message):
         '''Metodo que ejecutara el nodo cuando es lider, revisa en el log de las urls, si esta toma una base
            de datos aleatoria de todas las que tienen la info y les pide el content de la url, en caso de que 
-           no este en la tabla de logs, entonces devuelve False'''
+           no este en la tabla de logs, entonces devuelve False al Router'''
         
-        data = message.get('data')
+        data = message.get('data', {})
         sender_id = message.get('sender_id')
         task_id = data.get('task_id')
-        node_type = message.get('node_type')
-
         url = data.get('url')
 
-        self.db_cursor.execute('''
-            SELECT url_id FROM urls 
-            WHERE url = ?
-        '''
-        ,(url))
+        if not url or not task_id:
+            logging.error(f"BD_QUERY inválido: falta url o task_id")
+            return
 
-        url_id = self.db_cursor.fetchone()[0]
+        logging.info(f"BD Query recibida para task {task_id}, URL: {url}")
 
-        self.db_cursor.execute('''
-            SELECT d.database_id
-            FROM url_db_log udl
-            JOIN databases d ON udl.database_id = d.database
-            WHERE udl.url_id = ?
-            ORDER BY d.database_id
-        '''
-        ,(url_id))
+        try:
+            # Buscar si la URL ya está registrada
+            self.db_cursor.execute('SELECT url_id FROM urls WHERE url = ?', (url,))
+            result = self.db_cursor.fetchone()
 
-        databases_ips = self.db_cursor.fetchall()
+            if result is None:
+                # URL no encontrada en BD
+                logging.info(f"URL {url} NO encontrada en BD, responder negativo al Router")
+                self._send_bd_query_response(node_connection, task_id, found=False)
+                return
 
-        if len(databases_ips) != 0:
-            for (database_ip, conn) in self.subordinates.items():
-                with self.status_lock:
-                    url_query_message = MessageProtocol.create_message(
-                        msg_type=MessageProtocol.MESSAGE_TYPES['URL_QUERY'],
-                        sender_id=self.ip,
-                        node_type=self.node_type,
-                        timestamp=datetime.now(),
-                        data={'id_to_send':sender_id, 'url': url, 'task_id': task_id}
-                    )
-                    self._enqueue_message(url_query_message, database_ip, conn)
-                    break
-                    
-        else:
-            # mandar mensaje de que no hay registro al que consulto
-            url_query_response = MessageProtocol.create_message(
+            url_id = result[0]
+            logging.info(f"URL {url} encontrada con url_id={url_id}")
+
+            # Verificar si hay contenido disponible en subordinados
+            self.db_cursor.execute('''
+                SELECT d.node_id
+                FROM url_db_log udl
+                JOIN databases d ON udl.database_id = d.database_id
+                WHERE udl.url_id = ? AND d.is_active = 1
+                ORDER BY d.database_id
+            ''', (url_id,))
+
+            databases_with_content = self.db_cursor.fetchall()
+
+            if len(databases_with_content) == 0:
+                # URL registrada pero sin contenido disponible
+                logging.warning(f"URL {url} registrada pero sin contenido en subordinados")
+                self._send_bd_query_response(node_connection, task_id, found=False)
+                return
+
+            # Hay contenido disponible, pedir a un subordinado
+            subordinate_id = databases_with_content[0][0]
+            logging.info(f"Solicitando contenido de URL al subordinado {subordinate_id}")
+            
+            # Buscar conexión con el subordinado
+            subordinate_conn = None
+            with self.status_lock:
+                for node_id, conn in self.subordinates.items():
+                    if subordinate_id in node_id:
+                        subordinate_conn = conn
+                        break
+
+            if subordinate_conn:
+                # Enviar query al subordinado
+                url_query_message = self._create_message(
+                    MessageProtocol.MESSAGE_TYPES['URL_QUERY'],
+                    {
+                        'router_node_id': node_connection.node_id,  # ID del Router para responder
+                        'url': url,
+                        'task_id': task_id
+                    }
+                )
+                subordinate_conn.send_message(url_query_message)
+                logging.info(f"URL_QUERY enviada al subordinado {subordinate_id} para URL {url}")
+            else:
+                # No hay conexión con el subordinado que tiene el contenido
+                logging.warning(f"No hay conexión con subordinado {subordinate_id}, responder negativo")
+                self._send_bd_query_response(node_connection, task_id, found=False)
+
+        except Exception as e:
+            logging.error(f"Error en _url_query_leader: {e}")
+            import traceback
+            traceback.print_exc()
+            self._send_bd_query_response(node_connection, task_id, found=False)
+
+    def _send_bd_query_response(self, router_connection, task_id, found, result=None):
+        '''Envía respuesta al Router sobre una query de BD'''
+        response = self._create_message(
+            MessageProtocol.MESSAGE_TYPES['BD_QUERY_RESPONSE'],
+            {
+                'task_id': task_id,
+                'found': found,
+                'result': result if result else {}
+            }
+        )
+        
+        try:
+            router_connection.send_message(response)
+            logging.info(f"BD_QUERY_RESPONSE enviada al Router: task={task_id}, found={found}")
+        except Exception as e:
+            logging.error(f"Error enviando BD_QUERY_RESPONSE: {e}")
+
+    def _url_query_noleader(self, node_connection, message):
+        '''El subordinado BD recibe query del líder, busca contenido y responde directamente al Router'''
+        data = message.get('data', {})
+        url = data.get('url')
+        router_node_id = data.get('router_node_id')
+        task_id = data.get('task_id')
+
+        logging.info(f"URL_QUERY recibida de líder BD: task={task_id}, url={url}")
+
+        try:
+            # Buscar contenido en BD local
+            self.db_cursor.execute('SELECT url_id FROM urls WHERE url = ?', (url,))
+            url_id_row = self.db_cursor.fetchone()
+
+            if url_id_row is None:
+                logging.error(f"URL {url} no encontrada en tabla urls del subordinado")
+                # Responder al Router que no se encontró
+                self._send_bd_query_response_to_router(task_id, found=False)
+                return
+            
+            url_id = url_id_row[0]
+
+            # Obtener contenido
+            self.db_cursor.execute('SELECT content FROM url_content WHERE url_id = ?', (url_id,))
+            content_row = self.db_cursor.fetchone()
+
+            if content_row is None:
+                logging.error(f"Contenido no encontrado para url_id={url_id} en subordinado")
+                self._send_bd_query_response_to_router(task_id, found=False)
+                return
+            
+            import json
+            content_json = content_row[0]
+            result = json.loads(content_json)
+            
+            logging.info(f"Contenido encontrado para {url}, enviando al Router")
+            self._send_bd_query_response_to_router(task_id, found=True, result=result)
+            
+        except Exception as e:
+            logging.error(f"Error consultando URL en BD subordinado: {e}")
+            import traceback
+            traceback.print_exc()
+            self._send_bd_query_response_to_router(task_id, found=False)
+
+    def _send_bd_query_response_to_router(self, task_id, found, result=None):
+        '''Subordinado envía respuesta al Router usando socket temporal'''
+        try:
+            # Obtener info del Router desde el cache
+            if 'router' not in self.external_bosses_cache:
+                logging.error("Subordinado BD no tiene info del Router en cache")
+                return
+            
+            router_info = self.external_bosses_cache['router']
+            router_ip = router_info.get('ip')
+            router_port = router_info.get('port')
+            
+            if not router_ip or not router_port:
+                logging.error("Info del Router incompleta en cache")
+                return
+
+            # Crear mensaje
+            response_data = {
+                'task_id': task_id,
+                'found': found,
+                'result': result if found else None
+            }
+            
+            message = MessageProtocol.create_message(
                 msg_type=MessageProtocol.MESSAGE_TYPES['BD_QUERY_RESPONSE'],
                 sender_id=self.ip,
                 node_type=self.node_type,
-                timestamp=datetime.now(),
-                data={'found':False, 'task_id':'', 'result':False}
+                data=response_data
             )
-            try:
-                router_conn:NodeConnection = self.bosses_connections['router']
-                if not router_conn or not router_conn.is_connected():
-                    logging.warning(f"No hay conexion con router para mensaje tipo BD_QUERY_RESPONSE a {router_conn.ip}")
-                    return
-                else:
-                    self._enqueue_message(url_query_response, sender_id, conn)
-            except Exception as e:
-                logging.error(f"fallo al acceder al socket de {sender_id} con {self.ip}: {e}")
-
-    def _url_query_noleader(self, message):
-        '''Metodo que ejecutara el nodo cuando no es lider, revisa en la base de datos la url, y devuelve el contenido'''
-        data = message.get('data')
-        sender_id = message.get('sender_id')
-        url = data.get('url')
-        id_to_send = data.get('id_to_send')
-        task_id = data.get('task_id')
-
-        self.db_cursor.execute('''
-            SELECT url_id
-            FROM urls 
-            WHERE url = ?
-        '''
-        ,(url))
-
-        url_id = self.db_cursor.fetchall()
-
-        if len(url_id) == 0:
-            logging.error(f"url: {url} no se encuentra en la tabla urls de nodo: {self.ip}")
-            return
-        else:
-            url_id = url_id[0] 
-
-        self.db_cursor.execute('''
-            SELECT content
-            FROM url_content
-            WHERE url_id = ?
-        '''
-        ,(url_id))
-
-        content = self.db_cursor.fetchall()
-
-        if len(content) == 0:
-            logging.error(f"url_id: {url_id} no se encuentra en la tabla url_content del nodo: {self.ip}")
-            return
-        else:
-            result = content[0]
-
-        #crear mensaje de respuesta
-        content_message = MessageProtocol.create_message(
-            msg_type=MessageProtocol.MESSAGE_TYPES['BD_QUERY_RESPONSE'],
-            sender_id=self.ip,
-            node_type=self.node_type,
-            data={'found':True, 'result':result, 'task_id':task_id}
-        )
-
-        #hacer un socket temporal para enviar el mensaje, esta vez mandamos el mensaje directo sin usar la cola
-        try:
-            conn = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            conn.settimeout(30)
-            conn.connect((id_to_send, PORTS['router']))
-
-            try:
-                #enviar longitud
-                lenght = len(content_message)
-                conn.send(lenght.to_bytes(2, 'big'))
-
-                #enviar mensaje completo
-                conn.send(content_message)
-                logging.info(f"mensaje enviado a {id_to_send} de tipo BD_QUERY_RESPONSE")
             
-            except Exception as e:
-                logging.error(f"error enviando mensaje a {id_to_send} de tipo BD_QUERY_RESPONSE: {e}")
-
-
-            logging.info(f"mensaje de bd_query_response a {id_to_send} encolado, cerrando socket temporal...")
-
-            conn.close()
-        
+            # Enviar usando socket temporal
+            import socket
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(10)
+            
+            try:
+                sock.connect((router_ip, router_port))
+                
+                # Enviar longitud del mensaje (2 bytes como espera el Router)
+                message_bytes = message.encode('utf-8')
+                message_length = len(message_bytes)
+                sock.sendall(message_length.to_bytes(2, byteorder='big'))
+                
+                # Enviar mensaje
+                sock.sendall(message_bytes)
+                
+                logging.info(f"Subordinado BD envió BD_QUERY_RESPONSE al Router {router_ip}:{router_port}: task={task_id}, found={found}")
+            finally:
+                sock.close()
+            
         except Exception as e:
-            logging.error(f"error al enviar mensaje de tipo url_query_response a {id_to_send}: {e}")
+            logging.error(f"Error enviando BD_QUERY_RESPONSE desde subordinado: {e}")
+            import traceback
+            traceback.print_exc()
 
-    def _recive_task_result(self, message):
+    def _recive_task_result(self, node_connection, message):
         '''Recibe lo escrapeado de la url directo de un nodo scrapper, y le manda la info
-           a tres de las base de datos conectadas, para garantizar la replicabilidad de 3,
-           el que recibe el mensaje es el lider'''
+           a tres de las base de datos conectadas (incluyendo el líder), para garantizar replicabilidad de 3'''
         
-        #poner un if para que en caso de que les llegue a un no lider lo ignore
-
         sender_id = message.get('sender_id')
         node_type = message.get('node_type')
 
-        data = message.get('data')
+        data = message.get('data', {})
         task_id = data.get('task_id')
-        result = data.get('result')
-        completed_at = data.get('timestamp')
+        result = data.get('result', {})
+        completed_at = message.get('timestamp')
         url = result.get('url')
 
-        message_to_no_leaders = MessageProtocol.create_message(
-            msg_type=MessageProtocol.MESSAGE_TYPES['SAVE_DATA_NO_LEADER'],
-            sender_id=sender_id,
-            node_type=node_type,
-            timestamp=datetime.now().isoformat(),
-            data={'url': url, 'result': result, 'completed_at': completed_at, 'task_id': task_id}
+        logging.info(f"SAVE_DATA recibido del Scrapper: task={task_id}, url={url}")
+
+        # El líder NO guarda contenido, solo delega a subordinados
+        subordinados = list(self.subordinates.items())
+        
+        if len(subordinados) == 0:
+            logging.warning(f"No hay subordinados BD para guardar. Contenido se perderá.")
+            return
+        
+        # Seleccionar hasta 3 subordinados aleatorios para replicación
+        random.shuffle(subordinados)
+        selected_subordinates = subordinados[:3]
+
+        message_to_subordinate = self._create_message(
+            MessageProtocol.MESSAGE_TYPES['SAVE_DATA_NO_LEADER'],
+            {'url': url, 'result': result, 'completed_at': completed_at, 'task_id': task_id}
         )
 
-        subordinados:list[tuple] = self.subordinates.items()
-        if len(subordinados) == 0:
-            logging.warning(f"No hay bases de datos no lideres para almacenar la info de {sender_id}")
-            return
-        subordinados = random.shuffle(subordinados)
-        subordinados = subordinados[:3] # no importa que no haya 3
+        # Lista para trackear qué subordinados recibieron el contenido
+        successful_saves = []
 
-        for database_id, conn in subordinados:
-            self._enqueue_message(message_to_no_leaders, database_id, conn)
-            logging.info(f"mensaje de task_result_no_leader a {database_id} encolado")
+        for node_id, conn in selected_subordinates:
+            try:
+                conn.send_message(message_to_subordinate)
+                successful_saves.append(node_id)
+                logging.info(f"SAVE_DATA_NO_LEADER enviado a subordinado {node_id}")
+            except Exception as e:
+                logging.error(f"Error enviando a subordinado {node_id}: {e}")
+        
+        # Registrar en logs del líder qué subordinados tienen el contenido
+        if successful_saves:
+            try:
+                self._register_url_in_subordinates(url, successful_saves)
+            except Exception as e:
+                logging.error(f"Error registrando URL en logs del líder: {e}")
 
-    def _recive_task_result_no_leader(self, message):
-        '''Recibe el resultado del lider y lo almacena en su base de datos'''
+    def _recive_task_result_no_leader(self, node_connection, message):
+        '''Recibe el resultado del líder y lo almacena en su base de datos'''
 
-        data = message.get('data')
+        data = message.get('data', {})
         url = data.get('url')
-        content = data.get('result')
+        result = data.get('result', {})
         completed_at = data.get('completed_at')
+        task_id = data.get('task_id')
+
+        logging.info(f"SAVE_DATA_NO_LEADER recibido: task={task_id}, url={url}")
 
         try:
-            # insertar url en tabla urls
-            self.db_cursor.execute('''
-                INSERT OR IGNORE INTO urls (url) VALUES (?);
-            ''', (url,))
+            import json
+            
+            # Insertar URL en tabla urls si no existe
+            self.db_cursor.execute('INSERT OR IGNORE INTO urls (url) VALUES (?)', (url,))
             self.db_conn.commit()
 
-            # obtener url_id
-            self.db_cursor.execute('''
-                SELECT url_id FROM urls WHERE url = ?;
-            ''', (url,))
-            url_id = self.db_cursor.fetchone()[0]
+            # Obtener url_id
+            self.db_cursor.execute('SELECT url_id FROM urls WHERE url = ?', (url,))
+            url_id_row = self.db_cursor.fetchone()
+            if not url_id_row:
+                logging.error(f"No se pudo obtener url_id para {url}")
+                return
+            url_id = url_id_row[0]
 
-            # insertar contenido en tabla url_content
+            # Serializar resultado como JSON
+            content_json = json.dumps(result)
+
+            # Insertar contenido en tabla url_content
             self.db_cursor.execute('''
                 INSERT OR REPLACE INTO url_content (url_id, content, scrapped_at)
-                VALUES (?, ?, ?);
-            ''', (url_id, content, completed_at))
+                VALUES (?, ?, ?)
+            ''', (url_id, content_json, completed_at))
             self.db_conn.commit()
 
-            logging.info(f"Contenido de URL {url} almacenado correctamente en la base de datos.")
-        
+            logging.info(f"Subordinado BD guardó contenido de {url} (url_id={url_id})")
         except Exception as e:
-            logging.error(f"Error almacenando contenido de URL {url}: {e}")
+            logging.error(f"Error en subordinado almacenando URL {url}: {e}")
         
     
 
@@ -625,7 +769,18 @@ class DatabaseNode(Node):
                 boss_profile.set_connection(connection)
                 logging.debug(f"BossProfile actualizado. is_connected={boss_profile.is_connected()}")
                 
+                # Actualizar cache de jefes externos
+                self.external_bosses_cache[node_type] = {
+                    'ip': boss_ip,
+                    'port': boss_profile.port
+                }
+                
                 logging.info(f"✓ Conexión establecida con jefe {node_type} en {boss_ip}")
+                
+                # Replicar información a subordinados
+                if self.i_am_boss:
+                    self.replicate_external_bosses_info()
+                    logging.info(f"Información de jefe {node_type} replicada a subordinados")
             else:
                 logging.error(f"No se pudo conectar con jefe {node_type} en {boss_ip}")
                 

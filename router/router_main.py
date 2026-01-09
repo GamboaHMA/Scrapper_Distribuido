@@ -148,6 +148,12 @@ class RouterNode(Node):
             self._handle_scrapper_result
         )
         
+        # Handler temporal para BD_QUERY_RESPONSE desde subordinados BD (socket temporal)
+        self.add_temporary_message_handler(
+            MessageProtocol.MESSAGE_TYPES['BD_QUERY_RESPONSE'],
+            self._handle_bd_response_temporary
+        )
+        
         logging.debug("Handlers del router registrados")
     
     def _handle_identification_incoming(self, sock, client_ip, message):
@@ -343,14 +349,15 @@ class RouterNode(Node):
         self.task_queue.add_task(task_id, client_info, url)
     
     # TODO: COORDINAR CON DATA BASE
-    def _handle_bd_response(self, node_connection, data):
+    def _handle_bd_response(self, node_connection, message_dict):
         """
         Handler para respuestas de BD sobre consultas de URLs.
         
         Args:
             node_connection: Conexión con el nodo BD
-            data: Datos de la respuesta
+            message_dict: Mensaje completo con la respuesta
         """
+        data = message_dict.get('data', {})
         task_id = data.get('task_id')
         found = data.get('found', False)
         result = data.get('result')
@@ -359,10 +366,44 @@ class RouterNode(Node):
         
         if found and result:
             # La información ya existe en BD, responder al cliente
+            logging.info(f"BD tiene la info para task {task_id}, respondiendo al cliente")
             self._respond_to_client(task_id, result)
         else:
             # No existe en BD, delegar a Scrapper
+            logging.info(f"BD no tiene la info para task {task_id}, delegando a Scrapper")
             self._delegate_to_scrapper(task_id)
+
+    def _handle_bd_response_temporary(self, sock, client_ip, message_dict):
+        """
+        Handler temporal para respuestas de BD subordinados (socket temporal).
+        Procesa igual que las respuestas persistentes pero cierra el socket después.
+        
+        Args:
+            sock: Socket de la conexión temporal
+            client_ip: IP del nodo BD subordinado
+            message_dict: Mensaje completo con la respuesta
+        """
+        try:
+            logging.info(f"BD_QUERY_RESPONSE temporal recibida desde {client_ip}")
+            
+            data = message_dict.get('data', {})
+            task_id = data.get('task_id')
+            found = data.get('found', False)
+            result = data.get('result')
+            
+            logging.info(f"Respuesta temporal de BD ({client_ip}) para task {task_id}: found={found}")
+            
+            if found and result:
+                # La información existe en BD, responder al cliente
+                logging.info(f"BD subordinado tiene la info para task {task_id}, respondiendo al cliente")
+                self._respond_to_client(task_id, result)
+            else:
+                # No existe en BD, delegar a Scrapper
+                logging.info(f"BD subordinado no tiene la info para task {task_id}, delegando a Scrapper")
+                self._delegate_to_scrapper(task_id)
+                
+        finally:
+            sock.close()
     
     def _handle_scrapper_result(self, node_connection, message_dict):
         """
@@ -561,7 +602,7 @@ class RouterNode(Node):
         )
         
         bd_boss.connection.send_message(message)
-        logging.debug(f"Consulta enviada a BD para task {task_id}")
+        logging.info(f"✓ BD_QUERY enviada a BD para task {task_id}, URL: {url}")
     
     def _connect_to_external_bosses(self):
         """Conecta con los jefes de BD y Scrapper"""
