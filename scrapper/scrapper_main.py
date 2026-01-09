@@ -536,26 +536,29 @@ class ScrapperNode(Node):
             logging.error(f"No se pudo enviar resultado de tarea {task_id} a BD")
     
     def _notify_router_task_completed(self, task_id, result):
-        """Notifica al router que una tarea fue completada"""
+        """Notifica al router que una tarea fue completada con su resultado"""
         router_conn = self.bosses_connections.get('router')
         
         if not router_conn or not router_conn.is_connected():
             logging.warning(f"No hay conexión con Router para notificar tarea {task_id}")
             return
         
+        logging.debug(f"_notify_router_task_completed - task_id={task_id}, result={result}")
+        
         completion_msg = self._create_message(
-            MessageProtocol.MESSAGE_TYPES['TASK_COMPLETED'],
+            MessageProtocol.MESSAGE_TYPES['TASK_RESULT'],
             {
                 'task_id': task_id,
-                'status': result.get('status', 'unknown'),
+                'result': result,
+                'success': result.get('status') == 'success' if result else False,
                 'timestamp': datetime.now().isoformat()
             }
         )
         
         if router_conn.send_message(completion_msg):
-            logging.info(f"Notificación de tarea completada {task_id} enviada a Router")
+            logging.info(f"Resultado de tarea {task_id} enviado a Router")
         else:
-            logging.error(f"No se pudo notificar al Router sobre tarea {task_id}")
+            logging.error(f"No se pudo enviar resultado de tarea {task_id} al Router")
     
     def _start_task_assignment_thread(self):
         """Inicia hilo de asignación periódica de tareas"""

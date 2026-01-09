@@ -116,62 +116,178 @@ class RouterNode(Node):
             'scrapper': BossProfile('scrapper', scrapper_port)
         }
         
+        # Clientes conectados de forma persistente
+        # {client_id: NodeConnection}
+        self.connected_clients = {}
+        self.clients_lock = threading.Lock()
+        
         # Registrar handlers específicos del router
         self._register_router_handlers()
     
     def _register_router_handlers(self):
         """Registrar handlers para mensajes específicos del router"""
-        # Handler para peticiones de clientes (conexión temporal)
-        # self.temporary_message_handler['client_request'] = self._handle_client_request
-        self.add_temporary_message_handler(
+        # Handler para peticiones de clientes (conexión persistente)
+        self.add_persistent_message_handler(
             MessageProtocol.MESSAGE_TYPES['CLIENT_REQUEST'],
-            self._handle_client_request
+            self._handle_client_request_persistent
+        )
+        
+        # Handler para solicitudes de estado (conexión persistente)
+        self.add_persistent_message_handler(
+            MessageProtocol.MESSAGE_TYPES['STATUS_REQUEST'],
+            self._handle_status_request_persistent
         )
         
         # Handlers para respuestas de BD y Scrapper (conexión persistente)
-        # self.persistent_message_handler['bd_query_response'] = self._handle_bd_response
         self.add_persistent_message_handler(
             MessageProtocol.MESSAGE_TYPES['BD_QUERY_RESPONSE'],
             self._handle_bd_response
         )
-        # self.persistent_message_handler['scrapper_result'] = self.
         self.add_persistent_message_handler(
-            MessageProtocol.MESSAGE_TYPES['SCRAPPER_RESULT'],
+            MessageProtocol.MESSAGE_TYPES['TASK_RESULT'],
             self._handle_scrapper_result
         )
         
         logging.debug("Handlers del router registrados")
     
-    def _handle_client_request(self, sock, client_ip, message):
+    def _handle_identification_incoming(self, sock, client_ip, message):
         """
-        Handler para peticiones de clientes (conexión temporal).
+        Sobrescribe handler de identificación entrante para interceptar clientes.
         
         Args:
-            sock: Socket del cliente
+            sock: Socket de la conexión
             client_ip: IP del cliente
-            message: Mensaje con la petición
+            message: Mensaje de identificación
         """
         data = message.get('data', {})
+        sender_node_type = message.get('node_type', self.node_type)
+        is_temporary = data.get('is_temporary', False)
+        
+        # Si es un cliente, manejarlo de manera especial
+        if sender_node_type == 'client' and not is_temporary:
+            sender_id = message.get('sender_id', 'unknown-client')
+            logging.info(f"Cliente {sender_id} conectando desde {client_ip}")
+            
+            # Crear NodeConnection para el cliente con callback para procesar mensajes
+            node_connection = NodeConnection(
+                node_type='client',  # Tipo del nodo remoto
+                ip=client_ip,
+                port=0,  # Clientes no tienen puerto de escucha
+                on_message_callback=self._handle_message_from_node,  # Usar el mismo callback que subordinados
+                sender_node_type=self.node_type,
+                sender_id=self.node_id
+            )
+            
+            # Conectar usando el socket existente
+            if not node_connection.connect(existing_socket=sock):
+                logging.error(f"No se pudo establecer conexión persistente con cliente {sender_id}")
+                sock.close()
+                return
+            
+            # Agregar a connected_clients
+            with self.clients_lock:
+                self.connected_clients[sender_id] = node_connection
+                logging.info(f"✓ Cliente {sender_id} conectado persistentemente")
+            
+            # Responder con confirmación de identificación
+            response = self._create_message(
+                MessageProtocol.MESSAGE_TYPES['IDENTIFICATION'],
+                {
+                    'is_boss': self.i_am_boss,
+                    'ip': self.ip,
+                    'port': self.port,
+                    'node_type': self.node_type
+                }
+            )
+            node_connection.send_message(response)
+            
+            # Iniciar heartbeat monitoring para el cliente
+            threading.Thread(
+                target=self._heartbeat_loop,
+                args=(node_connection,),
+                daemon=True
+            ).start()
+            
+            return  # No continuar con el procesamiento normal
+        
+        # Para otros casos, delegar al handler del padre
+        super()._handle_identification_incoming(sock, client_ip, message)
+    
+    def _handle_identification(self, node_connection, message_dict):
+        """
+        Sobrescribe handler de identificación para manejar clientes (conexiones ya establecidas).
+        
+        Args:
+            node_connection: NodeConnection
+            message_dict: Mensaje de identificación
+        """
+        sender_node_type = message_dict.get('node_type', 'unknown')
+        data = message_dict.get('data', {})
+        is_boss = data.get('is_boss', False)
+        
+        # Si es un cliente, ya debería estar registrado por _handle_identification_incoming
+        if sender_node_type == 'client':
+            sender_id = message_dict.get('sender_id', 'unknown-client')
+            logging.debug(f"Mensaje de identificación de cliente {sender_id} (ya registrado)")
+            
+            # Responder con confirmación
+            response = self._create_message(
+                MessageProtocol.MESSAGE_TYPES['IDENTIFICATION'],
+                {
+                    'is_boss': self.i_am_boss,
+                    'ip': self.ip,
+                    'port': self.port,
+                    'node_type': self.node_type
+                }
+            )
+            node_connection.send_message(response)
+        
+        # Si es un jefe externo (BD o Scrapper) identificándose
+        elif sender_node_type in ['bd', 'scrapper'] and is_boss:
+            # Actualizar BossProfile si existe
+            if sender_node_type in self.external_bosses:
+                boss_profile = self.external_bosses[sender_node_type]
+                
+                # Si aún no tenemos conexión, usar esta
+                if not boss_profile.is_connected():
+                    boss_profile.set_connection(node_connection)
+                    logging.info(f"✓ Jefe externo {sender_node_type} conectado vía identificación entrante")
+                    logging.info(f"  BossProfile actualizado: disponible={boss_profile.available}, is_connected={boss_profile.is_connected()}")
+                else:
+                    logging.debug(f"Jefe externo {sender_node_type} ya tiene conexión activa")
+            
+            # Delegar al handler del padre para procesamiento adicional
+            super()._handle_identification(node_connection, message_dict)
+        
+        else:
+            # Delegar al handler del padre para nodos del sistema
+            super()._handle_identification(node_connection, message_dict)
+    
+    def _handle_client_request_persistent(self, node_connection, message_dict):
+        """
+        Handler para peticiones de clientes (conexión persistente).
+        
+        Args:
+            node_connection: NodeConnection del cliente
+            message_dict: Mensaje con la petición
+        """
+        data = message_dict.get('data', {})
         task_id = data.get('task_id')
         url = data.get('url')
         
         if not task_id or not url:
-            logging.warning(f"Petición inválida de {client_ip}: falta task_id o url")
-            sock.close()
+            logging.warning(f"Petición inválida de {node_connection.node_id}: falta task_id o url")
             return
         
-        logging.info(f"Petición recibida de {client_ip}: task_id={task_id}, url={url}")
+        logging.info(f"Petición recibida de {node_connection.node_id}: task_id={task_id}, url={url}")
         
         # Guardar información del cliente para responder después
         client_info = {
-            'ip': client_ip,
-            'socket': sock  # Mantenemos el socket abierto para responder
+            'connection': node_connection  # Conexión persistente
         }
         
         # Agregar tarea a la cola
         self.task_queue.add_task(task_id, client_info, url)
-        
-        # El socket se mantiene abierto hasta que respondamos
     
     # TODO: COORDINAR CON DATA BASE
     def _handle_bd_response(self, node_connection, data):
@@ -195,24 +311,68 @@ class RouterNode(Node):
             # No existe en BD, delegar a Scrapper
             self._delegate_to_scrapper(task_id)
     
-    def _handle_scrapper_result(self, node_connection, data):
+    def _handle_scrapper_result(self, node_connection, message_dict):
         """
         Handler para resultados de scrapping del jefe Scrapper.
+        Envía el resultado al cliente que solicitó la tarea.
         
         Args:
             node_connection: Conexión con el nodo Scrapper
-            data: Datos del resultado
+            message_dict: Mensaje completo del resultado
         """
+        logging.debug(f"_handle_scrapper_result - mensaje recibido: {message_dict}")
+        
+        # Extraer el campo 'data' del mensaje
+        data = message_dict.get('data', {})
         task_id = data.get('task_id')
         result = data.get('result')
         success = data.get('success', False)
         
-        logging.info(f"Resultado de Scrapper para task {task_id}: success={success}")
+        logging.info(f"Resultado de Scrapper recibido para task {task_id}: success={success}")
         
         if success:
             self._respond_to_client(task_id, result)
         else:
-            self._respond_to_client(task_id, {'error': 'Scrapping falló'})
+            self._respond_to_client(task_id, {'error': 'Scrapping falló', 'details': result})
+    
+    def _handle_status_request_persistent(self, node_connection, data):
+        """
+        Handler para solicitudes de estado del sistema (conexión persistente).
+        
+        Args:
+            node_connection: Conexión con el cliente
+            data: Datos de la solicitud
+        """
+        logging.info(f"Solicitud de estado recibida de {node_connection.node_id}")
+        
+        # Recopilar información del sistema
+        status = {
+            'router': {
+                'ip': self.ip,
+                'is_boss': self.i_am_boss,
+                'bd_connected': self.external_bosses['bd'].is_connected(),
+                'scrapper_connected': self.external_bosses['scrapper'].is_connected(),
+            },
+            'tasks': {
+                'pending': self.task_queue.get_pending_count(),
+                'in_progress': len(self.task_queue.in_progress),
+                'completed': len(self.task_queue.completed)
+            },
+            'timestamp': datetime.now().isoformat()
+        }
+        
+        # Crear respuesta
+        response = self._create_message(
+            MessageProtocol.MESSAGE_TYPES['STATUS_RESPONSE'],
+            status
+        )
+        
+        try:
+            # Enviar respuesta a través de la conexión persistente
+            node_connection.send_message(response)
+            logging.info(f"Estado enviado al cliente {node_connection.node_id}")
+        except Exception as e:
+            logging.error(f"Error enviando estado al cliente: {e}")
     
     def _respond_to_client(self, task_id, result):
         """
@@ -229,10 +389,10 @@ class RouterNode(Node):
             
             task_info = self.task_queue.in_progress[task_id]
             client_info = task_info['client_info']
-            client_socket = client_info.get('socket')
+            client_connection = client_info.get('connection')
             
-            if not client_socket:
-                logging.error(f"No hay socket para responder task {task_id}")
+            if not client_connection:
+                logging.error(f"No hay conexión para responder task {task_id}")
                 return
         
         # Crear respuesta
@@ -246,17 +406,12 @@ class RouterNode(Node):
         )
         
         try:
-            # Enviar respuesta
-            import json
-            response_bytes = json.dumps(response).encode()
-            client_socket.send(len(response_bytes).to_bytes(2, 'big'))
-            client_socket.send(response_bytes)
-            logging.info(f"Respuesta enviada al cliente para task {task_id}")
+            # Enviar respuesta a través de la conexión persistente
+            client_connection.send_message(response)
+            logging.info(f"Respuesta enviada al cliente {client_connection.node_id} para task {task_id}")
             
         except Exception as e:
             logging.error(f"Error enviando respuesta al cliente: {e}")
-        finally:
-            client_socket.close()
         
         # Marcar tarea como completada
         self.task_queue.mark_completed(task_id, result)
@@ -277,6 +432,7 @@ class RouterNode(Node):
             url = task_info['url']
         
         scrapper_boss = self.external_bosses['scrapper']
+        
         if not scrapper_boss.is_connected():
             logging.error(f"Scrapper no disponible, no se puede procesar task {task_id}")
             self._respond_to_client(task_id, {'error': 'Servicio de scrapping no disponible'})
@@ -287,8 +443,10 @@ class RouterNode(Node):
             MessageProtocol.MESSAGE_TYPES['NEW_TASK'],
             {
                 'task_id': task_id,
-                'url': url,
-                'source': 'router'
+                'task_data': {
+                    'url': url,
+                    'source': 'router'
+                }
             }
         )
         
@@ -357,10 +515,12 @@ class RouterNode(Node):
         logging.info("Conectando con jefes externos (BD y Scrapper)...")
         
         for node_type in self.external_bosses.keys():
+            logging.info(f"Iniciando thread de búsqueda periódica para jefe {node_type}")
             threading.Thread(
                 target=self._periodic_boss_search,
                 args=(node_type,),
-                daemon=True
+                daemon=True,
+                name=f"boss-search-{node_type}"
             ).start()
         # # Iniciar búsqueda periódica para BD
         # threading.Thread(
@@ -379,44 +539,63 @@ class RouterNode(Node):
     def _periodic_boss_search(self, node_type):
         """
         Busca periódicamente al jefe de un tipo de nodo hasta encontrarlo.
-        Una vez conectado, detiene la búsqueda.
+        Monitorea la conexión y reinicia búsqueda si se desconecta.
         
         Args:
             node_type: Tipo de nodo a buscar ('bd' o 'scrapper')
         """
-        retry_interval = 5  # segundos entre intentos
+        retry_interval = 5  # segundos entre intentos de búsqueda
+        wait_after_disconnect = 15  # segundos de espera tras desconexión (para dar tiempo a nuevo jefe)
         boss_profile = self.external_bosses[node_type]
         
-        logging.info(f"Iniciando búsqueda periódica del jefe {node_type}...")
+        logging.info(f"🔍 Iniciando búsqueda periódica del jefe {node_type}...")
         
         while self.running:
-            # Si ya estamos conectados, detener búsqueda
+            # Si ya estamos conectados, monitorear la conexión
             if boss_profile.is_connected():
-                logging.debug(f"Jefe {node_type} ya conectado, deteniendo búsqueda")
-                break
-            
-            # Intentar descubrir nodos
-            node_ips = self.discover_nodes(node_type, boss_profile.port)
-            
-            if node_ips:
-                # Buscar el jefe en la lista
-                boss_ip = self._find_boss_in_list(node_ips, node_type)
+                logging.debug(f"Jefe {node_type} conectado, monitoreando...")
                 
-                if boss_ip:
-                    logging.info(f"Jefe {node_type} encontrado en {boss_ip}")
-                    self._connect_to_boss(node_type, boss_ip)
+                # Esperar mientras esté conectado
+                while self.running and boss_profile.is_connected():
+                    time.sleep(5)  # Verificar cada 5 segundos
+                
+                # Se desconectó
+                if self.running:
+                    logging.warning(f"⚠️ Jefe {node_type} se desconectó. Esperando {wait_after_disconnect}s por nuevo jefe...")
                     
-                    # Verificar que la conexión fue exitosa
-                    if boss_profile.is_connected():
-                        logging.info(f"✓ Conexión con jefe {node_type} establecida")
-                        break
-                else:
-                    logging.debug(f"Nodos {node_type} encontrados pero ninguno es jefe")
-            else:
-                logging.debug(f"No se encontraron nodos {node_type} en el DNS")
+                    # Esperar un tiempo para ver si otro nodo se convierte en jefe y se conecta
+                    time.sleep(wait_after_disconnect)
+                    
+                    # Si después de esperar aún no hay conexión, reiniciar búsqueda
+                    if not boss_profile.is_connected():
+                        logging.info(f"⟳ No apareció nuevo jefe {node_type}, reiniciando búsqueda activa...")
+                    else:
+                        logging.info(f"✓ Nuevo jefe {node_type} se conectó durante la espera")
+                        continue
             
-            # Esperar antes del siguiente intento
-            time.sleep(retry_interval)
+            # Búsqueda activa: intentar descubrir nodos
+            if not boss_profile.is_connected():
+                node_ips = self.discover_nodes(node_type, boss_profile.port)
+                
+                if node_ips:
+                    # Buscar el jefe en la lista
+                    boss_ip = self._find_boss_in_list(node_ips, node_type)
+                    
+                    if boss_ip:
+                        logging.info(f"Jefe {node_type} encontrado en {boss_ip}")
+                        self._connect_to_boss(node_type, boss_ip)
+                        
+                        # Verificar que la conexión fue exitosa
+                        if boss_profile.is_connected():
+                            logging.info(f"✓ Conexión con jefe {node_type} establecida")
+                            continue  # Volver al modo monitor
+                    else:
+                        logging.debug(f"Nodos {node_type} encontrados pero ninguno es jefe")
+                else:
+                    logging.debug(f"No se encontraron nodos {node_type} en el DNS")
+                
+                # Esperar antes del siguiente intento
+                time.sleep(retry_interval)
         
         logging.info(f"Búsqueda periódica de jefe {node_type} finalizada")
     
@@ -487,27 +666,34 @@ class RouterNode(Node):
             if new_connection.connect():
                 logging.info(f"Conectado con jefe {node_type} en {boss_ip}")
                 
-                # Enviar identificación inicial (NO temporal, es conexión persistente)
-                identification = self._create_message(
-                    MessageProtocol.MESSAGE_TYPES['IDENTIFICATION'],
-                    {
-                        'ip': self.ip,
-                        'port': self.port,
-                        'is_boss': self.i_am_boss,
-                        'is_temporary': False
-                    }
-                )
-                new_connection.send_message(identification)
-                
-                # Actualizar perfil
-                boss_profile.set_connection(new_connection)
-                
-                # Iniciar heartbeats
-                threading.Thread(
-                    target=self._heartbeat_loop,
-                    args=(new_connection,),
-                    daemon=True
-                ).start()
+                try:
+                    # Enviar identificación inicial (NO temporal, es conexión persistente)
+                    identification = self._create_message(
+                        MessageProtocol.MESSAGE_TYPES['IDENTIFICATION'],
+                        {
+                            'ip': self.ip,
+                            'port': self.port,
+                            'is_boss': self.i_am_boss,
+                            'is_temporary': False
+                        }
+                    )
+                    new_connection.send_message(identification)
+                    
+                    # Actualizar perfil
+                    boss_profile.set_connection(new_connection)
+                    logging.info(f"✓ Conexión con jefe {node_type} establecida exitosamente")
+                    
+                    # Iniciar heartbeats
+                    threading.Thread(
+                        target=self._heartbeat_loop,
+                        args=(new_connection,),
+                        daemon=True
+                    ).start()
+                except Exception as e:
+                    logging.error(f"Error al configurar conexión con jefe {node_type}: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    boss_profile.clear_connection()
             else:
                 logging.error(f"No se pudo conectar con jefe {node_type} en {boss_ip}")
                 boss_profile.clear_connection()
@@ -518,6 +704,8 @@ class RouterNode(Node):
         Override del método base.
         """
         logging.info("=== INICIANDO TAREAS DEL JEFE ROUTER ===")
+        logging.info(f"Soy el router jefe: {self.i_am_boss}")
+        logging.info(f"external_bosses keys: {list(self.external_bosses.keys())}")
         
         # Conectar con jefes externos
         self._connect_to_external_bosses()

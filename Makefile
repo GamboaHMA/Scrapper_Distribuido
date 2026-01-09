@@ -306,3 +306,33 @@ logs-router-node: ## Ver logs del primer RouterNode
 	else \
 		echo "$(RED)No hay RouterNodes en ejecución$(NC)"; \
 	fi
+
+# =============================================================================
+# CLIENTE INTERACTIVO
+# =============================================================================
+
+CLIENT_IMAGE = interactive_client
+
+build-client: ## Construir imagen del cliente interactivo
+	@echo "$(YELLOW)Construyendo cliente interactivo...$(NC)"
+	docker build -t $(CLIENT_IMAGE) -f client/Dockerfile .
+	@echo "$(GREEN)✅ Cliente construido$(NC)"
+
+run-client: network ## Ejecutar cliente interactivo
+	@echo "$(YELLOW)Iniciando cliente interactivo...$(NC)"
+	@echo "$(GREEN)Usa 'help' para ver comandos disponibles$(NC)"
+	docker run -it --rm --name interactive-client \
+		--network $(NETWORK_NAME) \
+		$(CLIENT_IMAGE)
+
+# =============================================================================
+# COMANDOS COMBINADOS
+# =============================================================================
+
+demo: network build-dns build-scrapper-node build-router-node build-client ## Construir todo para demo
+	@echo "$(GREEN)✅ Sistema completo construido$(NC)"
+	@echo "$(YELLOW)Para ejecutar demo:$(NC)"
+	@echo "  1. make run-dns"
+	@echo "  2. make run-scrapper-nodes NUM=2"
+	@echo "  3. make run-router-node"
+	@echo "  4. make run-client"
