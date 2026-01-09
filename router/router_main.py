@@ -96,7 +96,7 @@ class RouterNode(Node):
     - Responder a clientes
     """
     
-    def __init__(self, scrapper_port=8080, bd_port=7070):
+    def __init__(self, scrapper_port=8080, bd_port=9090):
         """
         Inicializa el nodo Router.
         
@@ -146,6 +146,12 @@ class RouterNode(Node):
         self.add_persistent_message_handler(
             MessageProtocol.MESSAGE_TYPES['TASK_RESULT'],
             self._handle_scrapper_result
+        )
+        
+        # Handler temporal para BD_QUERY_RESPONSE desde subordinados BD (socket temporal)
+        self.add_temporary_message_handler(
+            MessageProtocol.MESSAGE_TYPES['BD_QUERY_RESPONSE'],
+            self._handle_bd_response_temporary
         )
         
         logging.debug("Handlers del router registrados")
@@ -210,7 +216,61 @@ class RouterNode(Node):
             
             return  # No continuar con el procesamiento normal
         
-        # Para otros casos, delegar al handler del padre
+        # Si es un jefe externo (BD o Scrapper) conectándose
+        is_boss = data.get('is_boss', False)
+        if self.i_am_boss and is_boss and sender_node_type in ['bd', 'scrapper']:
+            logging.info(f"Jefe externo {sender_node_type} {client_ip} estableciendo conexión persistente")
+            
+            # Obtener el puerto del mensaje
+            sender_port = data.get('port', self.port)
+            
+            # Crear NodeConnection para el jefe externo
+            node_connection = NodeConnection(
+                node_type=sender_node_type,
+                ip=client_ip,
+                port=sender_port,
+                on_message_callback=self._handle_message_from_node,
+                sender_node_type=self.node_type,
+                sender_id=self.node_id
+            )
+            
+            # Conectar usando el socket existente
+            if not node_connection.connect(existing_socket=sock):
+                logging.error(f"No se pudo establecer conexión persistente con jefe {sender_node_type}")
+                sock.close()
+                return
+            
+            # Actualizar BossProfile
+            if sender_node_type in self.external_bosses:
+                boss_profile = self.external_bosses[sender_node_type]
+                if not boss_profile.is_connected():
+                    boss_profile.set_connection(node_connection)
+                    logging.info(f"✓ Jefe externo {sender_node_type} conectado vía conexión entrante")
+                else:
+                    logging.debug(f"Jefe externo {sender_node_type} ya tiene conexión activa")
+            
+            # Responder con confirmación
+            response = self._create_message(
+                MessageProtocol.MESSAGE_TYPES['IDENTIFICATION'],
+                {
+                    'is_boss': self.i_am_boss,
+                    'ip': self.ip,
+                    'port': self.port,
+                    'node_type': self.node_type
+                }
+            )
+            node_connection.send_message(response)
+            
+            # Iniciar heartbeats
+            threading.Thread(
+                target=self._heartbeat_loop,
+                args=(node_connection,),
+                daemon=True
+            ).start()
+            
+            return  # No continuar con el procesamiento normal
+        
+        # Para otros casos (subordinados routers), delegar al handler del padre
         super()._handle_identification_incoming(sock, client_ip, message)
     
     def _handle_identification(self, node_connection, message_dict):
@@ -256,8 +316,7 @@ class RouterNode(Node):
                 else:
                     logging.debug(f"Jefe externo {sender_node_type} ya tiene conexión activa")
             
-            # Delegar al handler del padre para procesamiento adicional
-            super()._handle_identification(node_connection, message_dict)
+            # NO delegar al padre - Router usa external_bosses (BossProfile), no bosses_connections
         
         else:
             # Delegar al handler del padre para nodos del sistema
@@ -290,14 +349,15 @@ class RouterNode(Node):
         self.task_queue.add_task(task_id, client_info, url)
     
     # TODO: COORDINAR CON DATA BASE
-    def _handle_bd_response(self, node_connection, data):
+    def _handle_bd_response(self, node_connection, message_dict):
         """
         Handler para respuestas de BD sobre consultas de URLs.
         
         Args:
             node_connection: Conexión con el nodo BD
-            data: Datos de la respuesta
+            message_dict: Mensaje completo con la respuesta
         """
+        data = message_dict.get('data', {})
         task_id = data.get('task_id')
         found = data.get('found', False)
         result = data.get('result')
@@ -306,10 +366,44 @@ class RouterNode(Node):
         
         if found and result:
             # La información ya existe en BD, responder al cliente
+            logging.info(f"BD tiene la info para task {task_id}, respondiendo al cliente")
             self._respond_to_client(task_id, result)
         else:
             # No existe en BD, delegar a Scrapper
+            logging.info(f"BD no tiene la info para task {task_id}, delegando a Scrapper")
             self._delegate_to_scrapper(task_id)
+
+    def _handle_bd_response_temporary(self, sock, client_ip, message_dict):
+        """
+        Handler temporal para respuestas de BD subordinados (socket temporal).
+        Procesa igual que las respuestas persistentes pero cierra el socket después.
+        
+        Args:
+            sock: Socket de la conexión temporal
+            client_ip: IP del nodo BD subordinado
+            message_dict: Mensaje completo con la respuesta
+        """
+        try:
+            logging.info(f"BD_QUERY_RESPONSE temporal recibida desde {client_ip}")
+            
+            data = message_dict.get('data', {})
+            task_id = data.get('task_id')
+            found = data.get('found', False)
+            result = data.get('result')
+            
+            logging.info(f"Respuesta temporal de BD ({client_ip}) para task {task_id}: found={found}")
+            
+            if found and result:
+                # La información existe en BD, responder al cliente
+                logging.info(f"BD subordinado tiene la info para task {task_id}, respondiendo al cliente")
+                self._respond_to_client(task_id, result)
+            else:
+                # No existe en BD, delegar a Scrapper
+                logging.info(f"BD subordinado no tiene la info para task {task_id}, delegando a Scrapper")
+                self._delegate_to_scrapper(task_id)
+                
+        finally:
+            sock.close()
     
     def _handle_scrapper_result(self, node_connection, message_dict):
         """
@@ -508,7 +602,7 @@ class RouterNode(Node):
         )
         
         bd_boss.connection.send_message(message)
-        logging.debug(f"Consulta enviada a BD para task {task_id}")
+        logging.info(f"✓ BD_QUERY enviada a BD para task {task_id}, URL: {url}")
     
     def _connect_to_external_bosses(self):
         """Conecta con los jefes de BD y Scrapper"""
@@ -647,56 +741,55 @@ class RouterNode(Node):
         """
         boss_profile = self.external_bosses[node_type]
         
-        with boss_profile.lock:
-            # Verificar si ya existe conexión
-            if boss_profile.is_connected():
-                logging.warning(f"Ya existe conexión con jefe {node_type}")
-                return
+        # Verificar si ya existe conexión (is_connected ya tiene lock interno)
+        if boss_profile.is_connected():
+            logging.warning(f"Ya existe conexión con jefe {node_type}")
+            return
+        
+        # Crear nueva conexión
+        new_connection = NodeConnection(
+            node_type,
+            boss_ip,
+            boss_profile.port,
+            on_message_callback=self._handle_message_from_node,
+            sender_node_type=self.node_type,
+            sender_id=self.node_id
+        )
+        
+        if new_connection.connect():
+            logging.info(f"Conectado con jefe {node_type} en {boss_ip}")
             
-            # Crear nueva conexión
-            new_connection = NodeConnection(
-                node_type,
-                boss_ip,
-                boss_profile.port,
-                on_message_callback=self._handle_message_from_node,
-                sender_node_type=self.node_type,
-                sender_id=self.node_id
-            )
-            
-            if new_connection.connect():
-                logging.info(f"Conectado con jefe {node_type} en {boss_ip}")
+            try:
+                # Enviar identificación inicial (NO temporal, es conexión persistente)
+                identification = self._create_message(
+                    MessageProtocol.MESSAGE_TYPES['IDENTIFICATION'],
+                    {
+                        'ip': self.ip,
+                        'port': self.port,
+                        'is_boss': self.i_am_boss,
+                        'is_temporary': False
+                    }
+                )
+                new_connection.send_message(identification)
                 
-                try:
-                    # Enviar identificación inicial (NO temporal, es conexión persistente)
-                    identification = self._create_message(
-                        MessageProtocol.MESSAGE_TYPES['IDENTIFICATION'],
-                        {
-                            'ip': self.ip,
-                            'port': self.port,
-                            'is_boss': self.i_am_boss,
-                            'is_temporary': False
-                        }
-                    )
-                    new_connection.send_message(identification)
-                    
-                    # Actualizar perfil
-                    boss_profile.set_connection(new_connection)
-                    logging.info(f"✓ Conexión con jefe {node_type} establecida exitosamente")
-                    
-                    # Iniciar heartbeats
-                    threading.Thread(
-                        target=self._heartbeat_loop,
-                        args=(new_connection,),
-                        daemon=True
-                    ).start()
-                except Exception as e:
-                    logging.error(f"Error al configurar conexión con jefe {node_type}: {e}")
-                    import traceback
-                    traceback.print_exc()
-                    boss_profile.clear_connection()
-            else:
-                logging.error(f"No se pudo conectar con jefe {node_type} en {boss_ip}")
+                # Actualizar perfil (set_connection ya tiene lock interno)
+                boss_profile.set_connection(new_connection)
+                logging.info(f"✓ Conexión con jefe {node_type} establecida exitosamente")
+                
+                # Iniciar heartbeats
+                threading.Thread(
+                    target=self._heartbeat_loop,
+                    args=(new_connection,),
+                    daemon=True
+                ).start()
+            except Exception as e:
+                logging.error(f"Error al configurar conexión con jefe {node_type}: {e}")
+                import traceback
+                traceback.print_exc()
                 boss_profile.clear_connection()
+        else:
+            logging.error(f"No se pudo conectar con jefe {node_type} en {boss_ip}")
+            boss_profile.clear_connection()
     
     def start_boss_tasks(self):
         """
