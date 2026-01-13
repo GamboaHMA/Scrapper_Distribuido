@@ -4,7 +4,7 @@ WORKDIR /app
 
 # Copiar archivos necesarios
 COPY base_node/ /app/base_node/
-COPY client/interactive_client_v2.py /app/client/interactive_client.py
+COPY client/client.py /app/client/client.py
 
 # Variables de entorno (pueden sobrescribirse al ejecutar)
 ENV ROUTER_HOST=router
