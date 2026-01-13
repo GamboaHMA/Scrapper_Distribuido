@@ -250,6 +250,7 @@ class InteractiveClient:
                 time.sleep(5)  # Heartbeat cada 5 segundos
                 
                 if not self.router_connection or not self.router_connection.connected:
+                    self.log("⚠️ Desconexión detectada del Router", "WARNING")
                     break
                 
                 # Crear mensaje de heartbeat
@@ -265,10 +266,55 @@ class InteractiveClient:
                 
             except Exception as e:
                 if self.running:
-                    self.log(f"Error enviando heartbeat: {e}", "ERROR")
+                    self.log(f"⚠️ Error enviando heartbeat (Router caído): {e}", "WARNING")
                 break
         
         self.log("💓 Envío de heartbeats finalizado", "INFO")
+        
+        # Si aún estamos corriendo, intentar reconectar
+        if self.running:
+            self.log("🔄 Intentando reconectar al Router...", "WARNING")
+            self._reconnect_to_router()
+    
+    def _reconnect_to_router(self):
+        """Intenta reconectar al Router usando DNS de Docker"""
+        retry_interval = 5  # Segundos entre intentos
+        max_retries = 10
+        
+        for attempt in range(1, max_retries + 1):
+            if not self.running:
+                break
+            
+            self.log(f"🔄 Intento de reconexión {attempt}/{max_retries}...", "WARNING")
+            
+            # Cerrar conexión anterior si existe
+            if self.router_connection:
+                try:
+                    self.router_connection.close()
+                except:
+                    pass
+                self.router_connection = None
+            
+            # Resetear IP para forzar nueva búsqueda DNS
+            self.router_ip = None
+            
+            # Intentar conectar
+            if self.connect():
+                self.log("✅ Reconexión exitosa al Router", "SUCCESS")
+                return True
+            
+            # Esperar antes del próximo intento
+            if attempt < max_retries:
+                self.log(f"⏳ Esperando {retry_interval}s antes del próximo intento...", "INFO")
+                time.sleep(retry_interval)
+        
+        self.log("❌ No se pudo reconectar al Router después de múltiples intentos", "ERROR")
+        return False
+        
+        # Si aún estamos corriendo, intentar reconectar
+        if self.running:
+            self.log("🔄 Intentando reconectar al Router...", "WARNING")
+            self._reconnect_to_router()
     
     def _handle_message(self, node_connection, message):
         """Maneja mensajes recibidos del Router"""
@@ -332,7 +378,7 @@ class InteractiveClient:
     def send_scrape_request(self, url):
         """Envía petición de scrapping"""
         if not self.router_connection or not self.router_connection.connected:
-            self.log("No conectado al Router", "ERROR")
+            self.log("No conectado al Router (intenta 'reconnect')", "ERROR")
             return None
         
         task_id = str(uuid.uuid4())
@@ -366,7 +412,7 @@ class InteractiveClient:
     def send_status_request(self):
         """Solicita estado del sistema"""
         if not self.router_connection or not self.router_connection.connected:
-            self.log("No conectado al Router", "ERROR")
+            self.log("No conectado al Router (intenta 'reconnect')", "ERROR")
             return False
         
         message = {
@@ -395,6 +441,7 @@ class InteractiveClient:
 ║  status           - Muestra estado del sistema               ║
 ║  pending          - Muestra peticiones pendientes            ║
 ║  history          - Muestra historial de peticiones          ║
+║  reconnect        - Reconectar al Router (si se cayó)        ║
 ║  clear            - Limpia la pantalla                       ║
 ║  help             - Muestra esta ayuda                       ║
 ║  exit/quit        - Cierra el cliente                        ║
@@ -478,6 +525,13 @@ class InteractiveClient:
                     
                     elif cmd == 'history':
                         self.show_history()
+                    
+                    elif cmd == 'reconnect':
+                        self.log("🔄 Reconectando al Router...", "INFO")
+                        if self._reconnect_to_router():
+                            self.log("✅ Reconexión exitosa", "SUCCESS")
+                        else:
+                            self.log("❌ Reconexión falló", "ERROR")
                     
                     elif cmd == 'clear':
                         os.system('clear' if os.name != 'nt' else 'cls')
