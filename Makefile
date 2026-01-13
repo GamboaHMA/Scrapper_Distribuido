@@ -111,9 +111,9 @@ run-scrapper: network ## Ejecutar 1 ScrapperNode
 		$(SCRAPPER_NODE_IMAGE); \
 	echo "$(GREEN)✅ ScrapperNode $$NEXT_NUM iniciado$(NC)"
 
-run-scrappers: network ## Ejecutar 4 ScrapperNodes (por defecto)
-	@echo "$(YELLOW)Iniciando 4 ScrapperNodes...$(NC)"
-	@for i in 1 2 3 4; do \
+run-scrappers: network ## Ejecutar 2 ScrapperNodes (por defecto)
+	@echo "$(YELLOW)Iniciando 2 ScrapperNodes...$(NC)"
+	@for i in 1 2; do \
 		docker run -d --name scrapper-node-$$i \
 			--network $(NETWORK_NAME) \
 			--network-alias scrapper \
@@ -134,9 +134,9 @@ run-router: network ## Ejecutar 1 RouterNode
 		$(ROUTER_NODE_IMAGE); \
 	echo "$(GREEN)✅ RouterNode $$NEXT_NUM iniciado$(NC)"
 
-run-routers: network ## Ejecutar 4 RouterNodes (por defecto)
-	@echo "$(YELLOW)Iniciando 4 RouterNodes...$(NC)"
-	@for i in 1 2 3 4; do \
+run-routers: network ## Ejecutar 2 RouterNodes (por defecto)
+	@echo "$(YELLOW)Iniciando 2 RouterNodes...$(NC)"
+	@for i in 1 2; do \
 		docker run -d --name router-node-$$i \
 			--network $(NETWORK_NAME) \
 			--network-alias router \
@@ -158,9 +158,9 @@ run-database: network ## Ejecutar 1 DatabaseNode
 		$(DATABASE_NODE_IMAGE); \
 	echo "$(GREEN)✅ DatabaseNode $$NEXT_NUM iniciado$(NC)"
 
-run-databases: network ## Ejecutar 3 DatabaseNodes (por defecto)
-	@echo "$(YELLOW)Iniciando 3 DatabaseNodes...$(NC)"
-	@for i in 1 2 3; do \
+run-databases: network ## Ejecutar 2 DatabaseNodes (por defecto)
+	@echo "$(YELLOW)Iniciando 2 DatabaseNodes...$(NC)"
+	@for i in 1 2; do \
 		docker run -d --name db-node-$$i \
 			--network $(NETWORK_NAME) \
 			--network-alias bd \
@@ -191,12 +191,12 @@ run-streamlit: network ## Ejecutar interfaz Streamlit (accesible en http://local
 	@echo "$(GREEN)✅ Streamlit UI iniciado$(NC)"
 	@echo "$(YELLOW)Accede a la interfaz en:$(NC) http://localhost:8501"
 
-run-all: network run-scrappers run-routers run-databases run-client run-streamlit ## Ejecutar todo el sistema (4 scrappers, 4 routers, 3 databases, 1 cliente, UI)
+run-all: network run-scrappers run-routers run-databases run-client run-streamlit ## Ejecutar todo el sistema (2 scrappers, 2 routers, 2 databases, 1 cliente, UI)
 	@echo "$(GREEN)╔════════════════════════════════════════════════════════════════╗$(NC)"
 	@echo "$(GREEN)║  ✅ Sistema completo desplegado:                               ║$(NC)"
-	@echo "$(GREEN)║     - 4 ScrapperNodes                                          ║$(NC)"
-	@echo "$(GREEN)║     - 4 RouterNodes                                            ║$(NC)"
-	@echo "$(GREEN)║     - 3 DatabaseNodes                                          ║$(NC)"
+	@echo "$(GREEN)║     - 2 ScrapperNodes                                          ║$(NC)"
+	@echo "$(GREEN)║     - 2 RouterNodes                                            ║$(NC)"
+	@echo "$(GREEN)║     - 2 DatabaseNodes                                          ║$(NC)"
 	@echo "$(GREEN)║     - 1 Cliente                                                ║$(NC)"
 	@echo "$(GREEN)║     - 1 Streamlit UI                                           ║$(NC)"
 	@echo "$(GREEN)╚════════════════════════════════════════════════════════════════╝$(NC)"
