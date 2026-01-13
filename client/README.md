@@ -221,7 +221,7 @@ docker network inspect scrapper-network | grep -A 10 router
 
 ```bash
 # Asegúrate de tener acceso a la red de Docker
-python3 client/interactive_client_v2.py
+python3 client/client.py
 ```
 
 ### Probar conectividad
