@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Scrapper Distribuido - Cliente Web</title>
+    <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🕷️ Scrapper Distribuido</h1>
+            <div class="status-bar">
+                <div class="status-item">
+                    <span class="status-label">Estado:</span>
+                    <span id="connection-status" class="status-value disconnected">Desconectado</span>
+                </div>
+                <div class="status-item">
+                    <span class="status-label">Router:</span>
+                    <span id="router-ip" class="status-value">-</span>
+                </div>
+                <div class="status-item">
+                    <span class="status-label">Pendientes:</span>
+                    <span id="pending-count" class="status-value">0</span>
+                </div>
+                <div class="status-item">
+                    <span class="status-label">Completadas:</span>
+                    <span id="completed-count" class="status-value">0</span>
+                </div>
+            </div>
+        </header>
+
+        <main>
+            <section class="scrape-form">
+                <h2>Nueva Petición de Scrapping</h2>
+                <form id="scrape-form">
+                    <div class="form-group">
+                        <label for="url-input">URL a scrapear:</label>
+                        <input 
+                            type="url" 
+                            id="url-input" 
+                            placeholder="https://ejemplo.com" 
+                            required
+                            pattern="https?://.+"
+                        >
+                    </div>
+                    <button type="submit" id="scrape-btn">
+                        <span id="btn-text">🔍 Scrapear</span>
+                        <span id="btn-loader" class="loader hidden"></span>
+                    </button>
+                </form>
+                <div id="form-message" class="message hidden"></div>
+            </section>
+
+            <section class="results">
+                <h2>Resultados</h2>
+                <div id="results-container" class="results-container">
+                    <p class="no-results">No hay resultados aún. Envía una petición de scrapping para comenzar.</p>
+                </div>
+            </section>
+        </main>
+
+        <footer>
+            <p>Sistema Distribuido de Web Scrapping | Cliente Web Simple (sin frameworks)</p>
+        </footer>
+    </div>
+
+    <script src="/script.js"></script>
+</body>
+</html>

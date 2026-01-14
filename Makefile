@@ -6,6 +6,7 @@ SCRAPPER_NODE_IMAGE = scrapper_node
 ROUTER_NODE_IMAGE = router_node
 DATABASE_NODE_IMAGE = db_node
 CLIENT_IMAGE = client
+WEB_CLIENT_IMAGE = web_client
 
 # Colores
 GREEN = \033[0;32m
@@ -90,7 +91,12 @@ build-streamlit: ## Construir imagen de Streamlit UI
 	docker build -t streamlit-app -f streamlit_app/Dockerfile .
 	@echo "$(GREEN)✅ Streamlit UI construido$(NC)"
 
-build-all: build-scrapper build-router build-database build-client build-streamlit ## Construir todas las imágenes
+build-web-client: ## Construir imagen del Cliente Web
+	@echo "$(YELLOW)Construyendo Cliente Web...$(NC)"
+	docker build -t $(WEB_CLIENT_IMAGE) -f web_client/Dockerfile .
+	@echo "$(GREEN)✅ Cliente Web construido$(NC)"
+
+build-all: build-scrapper build-router build-database build-client build-streamlit build-web-client ## Construir todas las imágenes
 	@echo "$(GREEN)╔════════════════════════════════════════════════════════════════╗$(NC)"
 	@echo "$(GREEN)║  ✅ Todas las imágenes han sido construidas exitosamente       ║$(NC)"
 	@echo "$(GREEN)╚════════════════════════════════════════════════════════════════╝$(NC)"
@@ -191,6 +197,18 @@ run-streamlit: network ## Ejecutar interfaz Streamlit (accesible en http://local
 	@echo "$(GREEN)✅ Streamlit UI iniciado$(NC)"
 	@echo "$(YELLOW)Accede a la interfaz en:$(NC) http://localhost:8501"
 
+run-web-client: network ## Ejecutar Cliente Web (accesible en http://localhost:8080)
+	@echo "$(YELLOW)Iniciando Cliente Web...$(NC)"
+	docker run -d --name web-client \
+		--network $(NETWORK_NAME) \
+		-p 8080:8080 \
+		-e ROUTER_HOST=router \
+		-e ROUTER_PORT=7070 \
+		-e WEB_PORT=8080 \
+		$(WEB_CLIENT_IMAGE)
+	@echo "$(GREEN)✅ Cliente Web iniciado$(NC)"
+	@echo "$(YELLOW)Accede a la interfaz en:$(NC) http://localhost:8080"
+
 run-all: network run-scrappers run-routers run-databases run-client run-streamlit ## Ejecutar todo el sistema (2 scrappers, 2 routers, 2 databases, 1 cliente, UI)
 	@echo "$(GREEN)╔════════════════════════════════════════════════════════════════╗$(NC)"
 	@echo "$(GREEN)║  ✅ Sistema completo desplegado:                               ║$(NC)"
@@ -265,7 +283,7 @@ clean-all: clean-scrappers clean-routers clean-databases clean-clients clean-str
 clean-images: ## Eliminar todas las imágenes del proyecto
 	@echo "$(YELLOW)Eliminando imágenes del proyecto...$(NC)"
 	@images=""; \
-	for img in $(SCRAPPER_NODE_IMAGE) $(ROUTER_NODE_IMAGE) $(DATABASE_NODE_IMAGE) $(CLIENT_IMAGE) streamlit-app; do \
+	for img in $(SCRAPPER_NODE_IMAGE) $(ROUTER_NODE_IMAGE) $(DATABASE_NODE_IMAGE) $(CLIENT_IMAGE) $(WEB_CLIENT_IMAGE) streamlit-app; do \
 		id=$$(docker images -q $$img 2>/dev/null); \
 		if [ -n "$$id" ]; then \
 			images="$$images $$id"; \
