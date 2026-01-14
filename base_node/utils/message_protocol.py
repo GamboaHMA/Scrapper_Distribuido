@@ -52,7 +52,13 @@ class MessageProtocol:
         'REPLICATE_CONTENT': 'replicate_content',  # Líder solicita que un subordinado replique a otros
         'REQUEST_URL_INVENTORY': 'request_url_inventory',  # Nuevo jefe pide inventario de URLs a subordinados
         'REPORT_URL_INVENTORY': 'report_url_inventory',  # Subordinados reportan sus URLs al nuevo jefe
-        'SAVE_CONFIRMATION': 'save_confirmation'
+        'SAVE_CONFIRMATION': 'save_confirmation',
+        
+        # DATABASE VISUALIZATION (Cliente -> Router -> BD)
+        'LIST_TABLES': 'list_tables',  # Solicitar lista de tablas disponibles
+        'LIST_TABLES_RESPONSE': 'list_tables_response',  # Respuesta con lista de tablas
+        'GET_TABLE_DATA': 'get_table_data',  # Solicitar datos paginados de una tabla
+        'GET_TABLE_DATA_RESPONSE': 'get_table_data_response'  # Respuesta con datos paginados
     }
 
     @staticmethod

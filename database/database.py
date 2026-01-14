@@ -880,6 +880,18 @@ class DatabaseNode(Node):
             self._handle_report_url_inventory
         )
 
+        # Handler para listar tablas (visualización)
+        self.add_persistent_message_handler(
+            MessageProtocol.MESSAGE_TYPES['LIST_TABLES'],
+            self._handle_list_tables
+        )
+
+        # Handler para obtener datos paginados de tabla
+        self.add_persistent_message_handler(
+            MessageProtocol.MESSAGE_TYPES['GET_TABLE_DATA'],
+            self._handle_get_table_data
+        )
+
     def init_database(self):
         '''Inicializa la base de datos'''
         try:
@@ -1565,6 +1577,153 @@ class DatabaseNode(Node):
             boss_profile.clear_connection()
 
     #============= PARA DESCUBRIR A LOS OTROS JEFES ==============
+
+    def _handle_list_tables(self, node_connection, message):
+        """
+        Handler para listar todas las tablas disponibles en la BD.
+        Devuelve solo los nombres de las tablas.
+        
+        Args:
+            node_connection: Conexión con el cliente (a través de router)
+            message: Mensaje con la solicitud
+        """
+        data = message.get('data', {})
+        request_id = data.get('request_id')
+        
+        try:
+            cursor = self.db_conn.cursor()
+            
+            # Obtener solo los nombres de las tablas
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
+            tables = [row[0] for row in cursor.fetchall()]
+            
+            # Crear respuesta
+            response = {
+                'type': MessageProtocol.MESSAGE_TYPES['LIST_TABLES_RESPONSE'],
+                'sender_id': self.node_id,
+                'timestamp': datetime.now().isoformat(),
+                'data': {
+                    'request_id': request_id,
+                    'tables': tables,
+                    'success': True
+                }
+            }
+            
+            node_connection.send_message(response)
+            logging.info(f"Lista de {len(tables)} tablas enviada a {node_connection.node_id}")
+            
+        except Exception as e:
+            logging.error(f"Error listando tablas: {e}")
+            response = {
+                'type': MessageProtocol.MESSAGE_TYPES['LIST_TABLES_RESPONSE'],
+                'sender_id': self.node_id,
+                'timestamp': datetime.now().isoformat(),
+                'data': {
+                    'request_id': request_id,
+                    'tables': [],
+                    'success': False,
+                    'error': str(e)
+                }
+            }
+            node_connection.send_message(response)
+
+    def _handle_get_table_data(self, node_connection, message):
+        """
+        Handler para obtener datos paginados de una tabla específica.
+        
+        Args:
+            node_connection: Conexión con el cliente (a través de router)
+            message: Mensaje con la solicitud {request_id, table_name, page, page_size}
+        """
+        data = message.get('data', {})
+        request_id = data.get('request_id')
+        table_name = data.get('table_name')
+        page = data.get('page', 1)
+        page_size = data.get('page_size', 50)
+        
+        if not table_name:
+            response = {
+                'type': MessageProtocol.MESSAGE_TYPES['GET_TABLE_DATA_RESPONSE'],
+                'sender_id': self.node_id,
+                'timestamp': datetime.now().isoformat(),
+                'data': {
+                    'request_id': request_id,
+                    'success': False,
+                    'error': 'table_name requerido'
+                }
+            }
+            node_connection.send_message(response)
+            return
+        
+        try:
+            cursor = self.db_conn.cursor()
+            
+            # Verificar que la tabla existe
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table_name,))
+            if not cursor.fetchone():
+                raise ValueError(f"Tabla {table_name} no existe")
+            
+            # Obtener total de registros
+            cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
+            total_rows = cursor.fetchone()[0]
+            
+            # Calcular offset
+            offset = (page - 1) * page_size
+            
+            # Obtener datos paginados
+            cursor.execute(f"SELECT * FROM {table_name} LIMIT ? OFFSET ?", (page_size, offset))
+            rows = cursor.fetchall()
+            
+            # Obtener nombres de columnas
+            cursor.execute(f"PRAGMA table_info({table_name})")
+            columns = [col[1] for col in cursor.fetchall()]
+            
+            # Convertir filas a diccionarios
+            data_rows = []
+            for row in rows:
+                row_dict = {}
+                for idx, col in enumerate(columns):
+                    row_dict[col] = row[idx]
+                data_rows.append(row_dict)
+            
+            # Calcular información de paginación
+            total_pages = (total_rows + page_size - 1) // page_size
+            
+            response = {
+                'type': MessageProtocol.MESSAGE_TYPES['GET_TABLE_DATA_RESPONSE'],
+                'sender_id': self.node_id,
+                'timestamp': datetime.now().isoformat(),
+                'data': {
+                    'request_id': request_id,
+                    'success': True,
+                    'table_name': table_name,
+                    'columns': columns,
+                    'rows': data_rows,
+                    'pagination': {
+                        'page': page,
+                        'page_size': page_size,
+                        'total_rows': total_rows,
+                        'total_pages': total_pages
+                    }
+                }
+            }
+            
+            node_connection.send_message(response)
+            logging.info(f"Datos de tabla {table_name} (página {page}/{total_pages}) enviados a {node_connection.node_id}")
+            
+        except Exception as e:
+            logging.error(f"Error obteniendo datos de tabla {table_name}: {e}")
+            response = {
+                'type': MessageProtocol.MESSAGE_TYPES['GET_TABLE_DATA_RESPONSE'],
+                'sender_id': self.node_id,
+                'timestamp': datetime.now().isoformat(),
+                'data': {
+                    'request_id': request_id,
+                    'success': False,
+                    'error': str(e)
+                }
+            }
+            node_connection.send_message(response)
 
 
 if __name__ == "__main__":
