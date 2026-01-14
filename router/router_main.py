@@ -148,6 +148,24 @@ class RouterNode(Node):
             self._handle_scrapper_result
         )
         
+        # Handlers para visualización de BD
+        self.add_persistent_message_handler(
+            MessageProtocol.MESSAGE_TYPES['LIST_TABLES'],
+            self._handle_list_tables_request
+        )
+        self.add_persistent_message_handler(
+            MessageProtocol.MESSAGE_TYPES['GET_TABLE_DATA'],
+            self._handle_get_table_data_request
+        )
+        self.add_persistent_message_handler(
+            MessageProtocol.MESSAGE_TYPES['LIST_TABLES_RESPONSE'],
+            self._handle_list_tables_response
+        )
+        self.add_persistent_message_handler(
+            MessageProtocol.MESSAGE_TYPES['GET_TABLE_DATA_RESPONSE'],
+            self._handle_get_table_data_response
+        )
+        
         # Handler temporal para BD_QUERY_RESPONSE desde subordinados BD (socket temporal)
         self.add_temporary_message_handler(
             MessageProtocol.MESSAGE_TYPES['BD_QUERY_RESPONSE'],
@@ -810,6 +828,153 @@ class RouterNode(Node):
         ).start()
         
         logging.info("✓ Jefe Router operativo")
+
+    def _handle_list_tables_request(self, node_connection, message):
+        """
+        Handler para petición de lista de tablas desde cliente.
+        Reenvía la petición al jefe BD.
+        
+        Args:
+            node_connection: Conexión con el cliente
+            message: Mensaje con la solicitud
+        """
+        logging.info(f"Solicitud de lista de tablas recibida de {node_connection.node_id}")
+        
+        # Verificar conexión con BD
+        bd_boss = self.external_bosses.get('bd')
+        if not bd_boss or not bd_boss.is_connected():
+            error_response = {
+                'type': MessageProtocol.MESSAGE_TYPES['LIST_TABLES_RESPONSE'],
+                'sender_id': self.node_id,
+                'timestamp': datetime.now().isoformat(),
+                'data': {
+                    'success': False,
+                    'error': 'BD no disponible'
+                }
+            }
+            node_connection.send_message(error_response)
+            return
+        
+        # Guardar referencia del cliente para responder después
+        request_id = f"list_tables_{datetime.now().timestamp()}"
+        if not hasattr(self, '_pending_db_requests'):
+            self._pending_db_requests = {}
+        self._pending_db_requests[request_id] = node_connection
+        
+        # Reenviar petición a BD con identificador
+        forward_message = {
+            'type': MessageProtocol.MESSAGE_TYPES['LIST_TABLES'],
+            'sender_id': self.node_id,
+            'timestamp': datetime.now().isoformat(),
+            'data': {
+                'request_id': request_id
+            }
+        }
+        
+        # bd_boss.send_message(forward_message)
+        bd_boss.connection.send_message(forward_message)
+        logging.info(f"Solicitud de lista de tablas reenviada a BD jefe")
+
+    def _handle_get_table_data_request(self, node_connection, message):
+        """
+        Handler para petición de datos de tabla desde cliente.
+        Reenvía la petición al jefe BD.
+        
+        Args:
+            node_connection: Conexión con el cliente
+            message: Mensaje con la solicitud
+        """
+        data = message.get('data', {})
+        table_name = data.get('table_name')
+        logging.info(f"Solicitud de datos de tabla '{table_name}' recibida de {node_connection.node_id}")
+        
+        # Verificar conexión con BD
+        bd_boss = self.external_bosses.get('bd')
+        if not bd_boss or not bd_boss.is_connected():
+            error_response = {
+                'type': MessageProtocol.MESSAGE_TYPES['GET_TABLE_DATA_RESPONSE'],
+                'sender_id': self.node_id,
+                'timestamp': datetime.now().isoformat(),
+                'data': {
+                    'success': False,
+                    'error': 'BD no disponible'
+                }
+            }
+            node_connection.send_message(error_response)
+            return
+        
+        # Guardar referencia del cliente para responder después
+        request_id = f"table_data_{table_name}_{datetime.now().timestamp()}"
+        if not hasattr(self, '_pending_db_requests'):
+            self._pending_db_requests = {}
+        self._pending_db_requests[request_id] = node_connection
+        
+        # Reenviar petición a BD con identificador
+        forward_message = {
+            'type': MessageProtocol.MESSAGE_TYPES['GET_TABLE_DATA'],
+            'sender_id': self.node_id,
+            'timestamp': datetime.now().isoformat(),
+            'data': {
+                'request_id': request_id,
+                'table_name': data.get('table_name'),
+                'page': data.get('page', 1),
+                'page_size': data.get('page_size', 50)
+            }
+        }
+        
+        bd_boss.connection.send_message(forward_message)
+        logging.info(f"Solicitud de datos de tabla '{table_name}' reenviada a BD jefe")
+
+    def _handle_list_tables_response(self, node_connection, message):
+        """
+        Handler para respuesta de lista de tablas desde BD.
+        Reenvía la respuesta al cliente que la solicitó.
+        
+        Args:
+            node_connection: Conexión con BD
+            message: Mensaje con la respuesta
+        """
+        data = message.get('data', {})
+        request_id = data.get('request_id')
+        
+        if not hasattr(self, '_pending_db_requests'):
+            logging.warning("No hay peticiones pendientes de BD")
+            return
+        
+        client_connection = self._pending_db_requests.pop(request_id, None)
+        if not client_connection:
+            logging.warning(f"No se encontró cliente para request_id {request_id}")
+            return
+        
+        # Reenviar respuesta al cliente
+        client_connection.send_message(message)
+        logging.info(f"Lista de tablas enviada a {client_connection.node_id}")
+
+    def _handle_get_table_data_response(self, node_connection, message):
+        """
+        Handler para respuesta de datos de tabla desde BD.
+        Reenvía la respuesta al cliente que la solicitó.
+        
+        Args:
+            node_connection: Conexión con BD
+            message: Mensaje con la respuesta
+        """
+        data = message.get('data', {})
+        request_id = data.get('request_id')
+        
+        if not hasattr(self, '_pending_db_requests'):
+            logging.warning("No hay peticiones pendientes de BD")
+            return
+        
+        client_connection = self._pending_db_requests.pop(request_id, None)
+        if not client_connection:
+            logging.warning(f"No se encontró cliente para request_id {request_id}")
+            return
+        
+        # Reenviar respuesta al cliente
+        client_connection.send_message(message)
+        table_name = data.get('table_name', 'unknown')
+        logging.info(f"Datos de tabla '{table_name}' enviados a {client_connection.node_id}")
 
 
 if __name__ == "__main__":

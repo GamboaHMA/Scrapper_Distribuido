@@ -33,29 +33,86 @@
         <main>
             <section class="scrape-form">
                 <h2>Nueva Petición de Scrapping</h2>
+                
+                <div class="mode-selector">
+                    <label>
+                        <input type="radio" name="mode" value="single" checked id="mode-single">
+                        URL Individual
+                    </label>
+                    <label>
+                        <input type="radio" name="mode" value="multiple" id="mode-multiple">
+                        Múltiples URLs
+                    </label>
+                </div>
+
                 <form id="scrape-form">
-                    <div class="form-group">
+                    <div class="form-group" id="single-url-group">
                         <label for="url-input">URL a scrapear:</label>
                         <input 
                             type="url" 
                             id="url-input" 
                             placeholder="https://ejemplo.com" 
-                            required
                             pattern="https?://.+"
                         >
                     </div>
+                    
+                    <div class="form-group hidden" id="multiple-url-group">
+                        <label for="urls-textarea">URLs a scrapear (una por línea):</label>
+                        <textarea 
+                            id="urls-textarea" 
+                            rows="8"
+                            placeholder="https://ejemplo1.com&#10;https://ejemplo2.com&#10;https://ejemplo3.com"
+                        ></textarea>
+                        <small class="help-text">Ingresa una URL por línea. Líneas vacías serán ignoradas.</small>
+                    </div>
+                    
                     <button type="submit" id="scrape-btn">
                         <span id="btn-text">🔍 Scrapear</span>
                         <span id="btn-loader" class="loader hidden"></span>
                     </button>
                 </form>
                 <div id="form-message" class="message hidden"></div>
+                <div id="batch-progress" class="batch-progress hidden">
+                    <div class="progress-info">
+                        <span id="progress-text">Procesando...</span>
+                    </div>
+                    <div class="progress-bar">
+                        <div id="progress-fill" class="progress-fill"></div>
+                    </div>
+                </div>
             </section>
 
             <section class="results">
                 <h2>Resultados</h2>
                 <div id="results-container" class="results-container">
                     <p class="no-results">No hay resultados aún. Envía una petición de scrapping para comenzar.</p>
+                </div>
+            </section>
+
+            <section class="database-viewer">
+                <h2>📊 Visualizador de Base de Datos</h2>
+                <div class="db-controls">
+                    <button id="load-tables-btn" class="btn-secondary">
+                        🔄 Cargar Tablas
+                    </button>
+                </div>
+                
+                <div id="tables-list" class="tables-list hidden">
+                    <h3>Tablas Disponibles</h3>
+                    <div id="tables-container"></div>
+                </div>
+
+                <div id="table-viewer" class="table-viewer hidden">
+                    <div class="table-header">
+                        <h3 id="current-table-name"></h3>
+                        <button id="close-table-btn" class="btn-close">✕</button>
+                    </div>
+                    <div class="pagination-controls">
+                        <button id="prev-page-btn" class="btn-pagination" disabled>← Anterior</button>
+                        <span id="page-info">Página 1 de 1</span>
+                        <button id="next-page-btn" class="btn-pagination" disabled>Siguiente →</button>
+                    </div>
+                    <div id="table-data-container" class="table-data-container"></div>
                 </div>
             </section>
         </main>

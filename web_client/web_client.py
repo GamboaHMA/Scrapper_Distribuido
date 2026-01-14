@@ -56,6 +56,8 @@ class WebScrapperClient:
         # Tracking de peticiones
         self.pending_requests = {}  # {task_id: {'url': url, 'timestamp': datetime}}
         self.completed_requests = {}  # {task_id: {'result': result, 'timestamp': datetime}}
+        self.pending_db_requests = {}  # {request_id: {'type': 'tables'|'data', 'timestamp': datetime}}
+        self.completed_db_responses = {}  # {request_id: response_data}
         self.requests_lock = threading.Lock()
         
         # Thread de reconexión
@@ -231,6 +233,36 @@ class WebScrapperClient:
                     logging.info(f"✓ Resultado recibido para {task_id}")
                 else:
                     logging.warning(f"Resultado recibido para tarea desconocida: {task_id}")
+        
+        elif msg_type == MessageProtocol.MESSAGE_TYPES['LIST_TABLES_RESPONSE']:
+            data = message.get('data', {})
+            success = data.get('success', False)
+            tables = data.get('tables', [])
+            
+            logging.info(f"LIST_TABLES_RESPONSE recibido: success={success}, tables_count={len(tables)}")
+            logging.info(f"DEBUG - Contenido de tables: {tables}")
+            logging.info(f"DEBUG - Tipo de primer elemento: {type(tables[0]) if tables else 'lista vacía'}")
+            
+            with self.requests_lock:
+                if 'tables' in self.pending_db_requests:
+                    self.completed_db_responses['tables'] = data
+                    del self.pending_db_requests['tables']
+                    logging.info(f"✓ Lista de {len(tables)} tablas guardada")
+                else:
+                    logging.warning("Respuesta de tablas recibida sin petición pendiente")
+        
+        elif msg_type == MessageProtocol.MESSAGE_TYPES['GET_TABLE_DATA_RESPONSE']:
+            data = message.get('data', {})
+            table_name = data.get('table_name', 'unknown')
+            request_key = f"table_{table_name}"
+            
+            with self.requests_lock:
+                if request_key in self.pending_db_requests:
+                    self.completed_db_responses[request_key] = data
+                    del self.pending_db_requests[request_key]
+                    logging.info(f"✓ Datos de tabla '{table_name}' recibidos")
+                else:
+                    logging.warning(f"Respuesta de tabla '{table_name}' recibida sin petición pendiente")
     
     def request_scraping(self, url):
         """Envía petición de scrapping"""
@@ -287,6 +319,80 @@ class WebScrapperClient:
             'completed_requests': completed_count
         }
     
+    def request_list_tables(self):
+        """Solicita lista de tablas disponibles en BD"""
+        if not self.router_connection or not self.router_connection.is_connected():
+            if not self.connect():
+                return None, "No hay conexión con el router"
+        
+        message = {
+            'type': MessageProtocol.MESSAGE_TYPES['LIST_TABLES'],
+            'sender_id': self.client_id,
+            'timestamp': datetime.now().isoformat(),
+            'data': {}
+        }
+        
+        with self.requests_lock:
+            # Marcar que hay una petición de tablas pendiente
+            self.pending_db_requests['tables'] = {
+                'type': 'tables',
+                'timestamp': datetime.now()
+            }
+        
+        success = self.router_connection.send_message(message)
+        
+        if success:
+            logging.info("Petición de lista de tablas enviada")
+            return 'tables', None
+        else:
+            with self.requests_lock:
+                if 'tables' in self.pending_db_requests:
+                    del self.pending_db_requests['tables']
+            return None, "Error enviando petición"
+    
+    def request_table_data(self, table_name, page=1, page_size=50):
+        """Solicita datos paginados de una tabla"""
+        if not self.router_connection or not self.router_connection.is_connected():
+            if not self.connect():
+                return None, "No hay conexión con el router"
+        
+        request_key = f"table_{table_name}"
+        
+        message = {
+            'type': MessageProtocol.MESSAGE_TYPES['GET_TABLE_DATA'],
+            'sender_id': self.client_id,
+            'timestamp': datetime.now().isoformat(),
+            'data': {
+                'table_name': table_name,
+                'page': page,
+                'page_size': page_size
+            }
+        }
+        
+        with self.requests_lock:
+            self.pending_db_requests[request_key] = {
+                'type': 'data',
+                'table_name': table_name,
+                'page': page,
+                'timestamp': datetime.now()
+            }
+        
+        success = self.router_connection.send_message(message)
+        
+        if success:
+            logging.info(f"Petición de datos de tabla '{table_name}' enviada (página {page})")
+            return request_key, None
+        else:
+            with self.requests_lock:
+                if request_key in self.pending_db_requests:
+                    del self.pending_db_requests[request_key]
+            return None, "Error enviando petición"
+    
+    def get_db_response(self, request_id):
+        """Obtiene respuesta de una petición de BD"""
+        with self.requests_lock:
+            return self.completed_db_responses.get(request_id)
+    
     def stop(self):
         """Detiene el cliente"""
         self.running = False
@@ -327,6 +433,52 @@ class WebHandler(BaseHTTPRequestHandler):
                 self.send_json_response({'success': True, 'result': result})
             else:
                 self.send_json_response({'success': False, 'message': 'Resultado no encontrado'})
+        elif parsed_path.path == '/api/tables':
+            # API: Solicitar lista de tablas
+            request_id, error = client.request_list_tables()
+            if request_id:
+                # Esperar respuesta (con timeout)
+                import time
+                timeout = 5  # 5 segundos
+                start = time.time()
+                while time.time() - start < timeout:
+                    response = client.get_db_response(request_id)
+                    if response:
+                        logging.info(f"Respuesta BD recibida para list_tables: success={response.get('success')}, tables_count={len(response.get('tables', []))}")
+                        self.send_json_response(response)
+                        return
+                    time.sleep(0.1)
+                logging.warning("Timeout esperando respuesta de lista de tablas")
+                self.send_json_response({'success': False, 'message': 'Timeout esperando respuesta'})
+            else:
+                self.send_json_response({'success': False, 'message': error}, 500)
+        elif parsed_path.path.startswith('/api/table/'):
+            # API: Obtener datos de tabla específica
+            # Formato: /api/table/<nombre>?page=1&page_size=50
+            path_parts = parsed_path.path.split('/')
+            if len(path_parts) >= 4:
+                table_name = path_parts[3]
+                query_params = parse_qs(parsed_path.query)
+                page = int(query_params.get('page', ['1'])[0])
+                page_size = int(query_params.get('page_size', ['50'])[0])
+                
+                request_id, error = client.request_table_data(table_name, page, page_size)
+                if request_id:
+                    # Esperar respuesta (con timeout)
+                    import time
+                    timeout = 5
+                    start = time.time()
+                    while time.time() - start < timeout:
+                        response = client.get_db_response(request_id)
+                        if response:
+                            self.send_json_response(response)
+                            return
+                        time.sleep(0.1)
+                    self.send_json_response({'success': False, 'message': 'Timeout esperando respuesta'})
+                else:
+                    self.send_json_response({'success': False, 'message': error}, 500)
+            else:
+                self.send_json_response({'success': False, 'message': 'Tabla no especificada'}, 400)
         else:
             self.send_error(404)
     
