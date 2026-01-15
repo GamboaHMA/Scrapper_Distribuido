@@ -321,6 +321,11 @@ button:disabled {
     background-color: #d1fae5;
 }
 
+.result-card.error {
+    border-color: var(--error-color);
+    background-color: #fee2e2;
+}
+
 .result-header {
     display: flex;
     justify-content: space-between;
@@ -402,6 +407,11 @@ button:disabled {
     color: white;
 }
 
+.result-status.error {
+    background-color: var(--error-color);
+    color: white;
+}
+
 .result-meta {
     font-size: 0.875rem;
     color: var(--text-secondary);
@@ -421,6 +431,29 @@ button:disabled {
 .result-data pre {
     white-space: pre-wrap;
     word-break: break-word;
+}
+
+.result-data.error-data {
+    background-color: #fef2f2;
+    border: 1px solid var(--error-color);
+}
+
+.error-message {
+    background-color: white;
+    padding: 12px;
+    border-radius: 4px;
+    margin: 8px 0;
+    color: var(--error-color);
+    font-weight: 600;
+    border-left: 4px solid var(--error-color);
+}
+
+.error-help {
+    margin-top: 12px;
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    line-height: 1.6;
 }
 
 /* Database Viewer */

@@ -430,14 +430,141 @@ class Node:
                         logging.error(f"No se pudo agregar jefe externo {sender_node_type} {client_ip}")
                         sock.close()
                 else:
-                    # Es otro jefe de mi mismo tipo (caso raro, ambos son jefes) → RECHAZAR
-                    logging.debug(f"Otro jefe {sender_node_type} {client_ip} intentó conectar (ambos somos jefes)")
-                    sock.close()
+                    # Es otro jefe de mi mismo tipo → COMPARAR IPs
+                    logging.warning(f"⚠️  Conflicto: Otro jefe {sender_node_type} ({client_ip}) detectado. Comparando IPs...")
+                    
+                    # Comparar IPs lexicográficamente
+                    if self.ip > client_ip:
+                        # Mi IP es mayor → YO sigo siendo jefe, él se vuelve subordinado
+                        logging.info(f"✓ Mi IP ({self.ip}) > Su IP ({client_ip}). Mantengo rol de jefe, registrándolo como subordinado.")
+                        
+                        # Agregar como subordinado
+                        success = self.add_subordinate(client_ip, existing_socket=sock)
+                        
+                        if success:
+                            # Notificar a la subclase que se heredó un nuevo subordinado de un conflicto
+                            self._on_subordinate_inherited_from_conflict(client_ip)
+                            
+                            # Enviarle IDENTIFICATION para que sepa que debe volverse subordinado
+                            response = self._create_message(
+                                MessageProtocol.MESSAGE_TYPES['IDENTIFICATION'],
+                                {
+                                    'node_port': self.port,
+                                    'is_boss': True,
+                                    'is_temporary': False
+                                }
+                            )
+                            try:
+                                response_bytes = json.dumps(response).encode()
+                                sock.sendall(len(response_bytes).to_bytes(2, 'big'))
+                                sock.sendall(response_bytes)
+                                logging.info(f"Notificación de jefe enviada a {client_ip}")
+                            except Exception as e:
+                                logging.error(f"Error notificando a {client_ip}: {e}")
+                        else:
+                            logging.error(f"No se pudo registrar {client_ip} como subordinado")
+                            sock.close()
+                    else:
+                        # Su IP es mayor → ÉL debe ser jefe, yo me vuelvo subordinado
+                        logging.warning(f"⚠️  Su IP ({client_ip}) > Mi IP ({self.ip}). Cediendo rol de jefe...")
+                        
+                        # Cerrar el socket entrante (él debe iniciar la conexión como jefe)
+                        sock.close()
+                        
+                        # Ceder el rol de jefe
+                        self._demote_to_subordinate(client_ip)
             
             else:
                 # No soy jefe, no debería recibir conexiones persistentes
                 logging.debug(f"Cerrando conexión persistente de {sender_node_type} {client_ip} (no soy jefe)")
                 sock.close()
+    
+    def _demote_to_subordinate(self, new_boss_ip):
+        """
+        Cede el rol de jefe y se convierte en subordinado del nodo con new_boss_ip.
+        
+        Args:
+            new_boss_ip: IP del nodo que debe ser el nuevo jefe
+        """
+        logging.warning(f"🔻 Cediendo rol de jefe. Nuevo jefe: {new_boss_ip}")
+        
+        # 1. Dejar de ser jefe
+        self.i_am_boss = False
+        
+        # 2. Detener tareas de jefe si existen
+        if hasattr(self, 'stop_boss_tasks'):
+            try:
+                self.stop_boss_tasks()
+                logging.info("Tareas de jefe detenidas")
+            except Exception as e:
+                logging.error(f"Error deteniendo tareas de jefe: {e}")
+        
+        # 3. Convertir subordinados actuales en conexiones a cerrar
+        if self.subordinates:
+            logging.info(f"Desconectando {len(self.subordinates)} subordinados...")
+            for node_id, conn in list(self.subordinates.items()):
+                try:
+                    conn.disconnect()
+                except Exception as e:
+                    logging.error(f"Error desconectando subordinado {node_id}: {e}")
+            self.subordinates.clear()
+        
+        # 4. Conectarse al nuevo jefe
+        logging.info(f"Conectando al nuevo jefe en {new_boss_ip}:{self.port}...")
+        self._connect_to_boss_as_subordinate(new_boss_ip, self.port)
+        
+        logging.info(f"✓ Transición completada. Ahora soy subordinado de {new_boss_ip}")
+    
+    def _connect_to_boss_as_subordinate(self, boss_ip, boss_port):
+        """
+        Se conecta a un jefe como subordinado.
+        
+        Args:
+            boss_ip: IP del jefe
+            boss_port: Puerto del jefe
+        """
+        try:
+            # Crear conexión al jefe
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(5)
+            sock.connect((boss_ip, boss_port))
+            
+            # Enviar IDENTIFICATION como subordinado
+            identification = self._create_message(
+                MessageProtocol.MESSAGE_TYPES['IDENTIFICATION'],
+                {
+                    'node_port': self.port,
+                    'is_boss': False,  # Ahora soy subordinado
+                    'is_temporary': False  # Conexión persistente
+                }
+            )
+            
+            msg_bytes = json.dumps(identification).encode()
+            sock.sendall(len(msg_bytes).to_bytes(2, 'big'))
+            sock.sendall(msg_bytes)
+            
+            # Crear NodeConnection
+            boss_conn = NodeConnection(
+                node_type=self.node_type,
+                ip=boss_ip,
+                port=boss_port,
+                on_message_callback=self._handle_message_from_node,
+                sender_node_type=self.node_type,
+                sender_id=self.node_id
+            )
+            
+            # Conectar usando el socket existente
+            if boss_conn.connect(existing_socket=sock):
+                # Actualizar mi perfil de jefe
+                with self.my_boss_profile.lock:
+                    self.my_boss_profile.set_connection(boss_conn)
+                
+                logging.info(f"✓ Conectado exitosamente al jefe {boss_ip}:{boss_port}")
+            else:
+                logging.error(f"No se pudo establecer NodeConnection con {boss_ip}:{boss_port}")
+            
+        except Exception as e:
+            logging.error(f"Error conectando al nuevo jefe {boss_ip}:{boss_port}: {e}")
     
     def _handle_election_message(self, sock, client_ip, message):
         """
@@ -1021,6 +1148,18 @@ class Node:
         # Implementación base: no hace nada (para nodos sin tareas como Router o BD)
         logging.debug(f"reassign_tasks_from_subordinate no implementado para {self.node_type}")
         return 0
+    
+    def _on_subordinate_inherited_from_conflict(self, subordinate_node_id):
+        """
+        Hook que se llama cuando se hereda un subordinado después de un conflicto entre jefes.
+        Las subclases pueden sobrescribir para realizar acciones específicas.
+        
+        Args:
+            subordinate_node_id (str): ID del subordinado heredado
+        """
+        logging.debug(f"Subordinado heredado en conflicto: {subordinate_node_id}")
+        # Implementación base: no hace nada
+        pass
         
     def send_to_boss(self, message_dict):
         """Enviar mensaje a mi jefe"""

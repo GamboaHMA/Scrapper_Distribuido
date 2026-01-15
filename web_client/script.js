@@ -360,8 +360,22 @@ function renderResults() {
 }
 
 function renderResultCard(taskId, task) {
-    const statusClass = task.status === 'completed' ? 'completed' : 'pending';
-    const statusText = task.status === 'completed' ? 'Completada' : 'Pendiente...';
+    // Determinar el estado basado en task.status y task.result.status
+    let statusClass = 'pending';
+    let statusText = 'Pendiente...';
+    
+    if (task.status === 'completed' && task.result) {
+        if (task.result.status === 'error') {
+            statusClass = 'error';
+            statusText = '❌ Error';
+        } else if (task.result.status === 'success') {
+            statusClass = 'completed';
+            statusText = '✓ Completada';
+        } else {
+            statusClass = 'completed';
+            statusText = 'Completada';
+        }
+    }
     
     const timestamp = new Date(task.timestamp).toLocaleString('es-ES');
     
@@ -369,24 +383,63 @@ function renderResultCard(taskId, task) {
     if (task.status === 'completed' && task.result) {
         const result = task.result;
         
-        // Formatear resultado
-        const htmlLength = result.html_length || 0;
-        const linksCount = result.links_count || 0;
-        const links = result.links || [];
-        
-        resultHTML = `
-            <div class="result-data">
-                <strong>📊 Estadísticas:</strong><br>
-                • Tamaño HTML: ${htmlLength.toLocaleString()} caracteres<br>
-                • Enlaces encontrados: ${linksCount}<br>
-                <br>
-                <strong>🔗 Enlaces (primeros 10):</strong><br>
-                ${links.length > 0 
-                    ? links.map(link => `• <a href="${link}" target="_blank">${link}</a>`).join('<br>')
-                    : 'No se encontraron enlaces'
-                }
-            </div>
-        `;
+        if (result.status === 'error') {
+            // Mostrar error
+            const errorMsg = result.error || 'Error desconocido';
+            resultHTML = `
+                <div class="result-data error-data">
+                    <strong>❌ Error al scrapear:</strong><br>
+                    <div class="error-message">${escapeHtml(errorMsg)}</div>
+                    <p class="error-help">
+                        Posibles causas:<br>
+                        • La URL no es accesible<br>
+                        • Tiempo de espera agotado<br>
+                        • Problemas de red<br>
+                        • Servidor rechazó la conexión
+                    </p>
+                </div>
+            `;
+        } else {
+            // Formatear resultado exitoso
+            const htmlLength = result.html_length || 0;
+            const linksCount = result.links_count || 0;
+            const links = result.links || [];
+            
+            // Validar que el resultado tiene contenido real
+            // Si tiene 0 en todo, es un error disfrazado de éxito
+            if (htmlLength === 0 && linksCount === 0) {
+                resultHTML = `
+                    <div class="result-data error-data">
+                        <strong>❌ Error al scrapear:</strong><br>
+                        <div class="error-message">No se pudo obtener contenido de la página</div>
+                        <p class="error-help">
+                            Posibles causas:<br>
+                            • La URL no respondió con contenido HTML<br>
+                            • El servidor rechazó la conexión<br>
+                            • Problemas de red durante el scraping<br>
+                            • La página está vacía o protegida
+                        </p>
+                    </div>
+                `;
+                // Cambiar el estado visual a error
+                statusClass = 'error';
+                statusText = '❌ Error';
+            } else {
+                resultHTML = `
+                    <div class="result-data">
+                        <strong>📊 Estadísticas:</strong><br>
+                        • Tamaño HTML: ${htmlLength.toLocaleString()} caracteres<br>
+                        • Enlaces encontrados: ${linksCount}<br>
+                        <br>
+                        <strong>🔗 Enlaces (primeros 10):</strong><br>
+                        ${links.length > 0 
+                            ? links.map(link => `• <a href="${link}" target="_blank">${link}</a>`).join('<br>')
+                            : 'No se encontraron enlaces'
+                        }
+                    </div>
+                `;
+            }
+        }
     } else if (task.status === 'pending') {
         resultHTML = `
             <div class="result-data">

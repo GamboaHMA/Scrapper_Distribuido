@@ -52,6 +52,8 @@ class MessageProtocol:
         'REPLICATE_CONTENT': 'replicate_content',  # Líder solicita que un subordinado replique a otros
         'REQUEST_URL_INVENTORY': 'request_url_inventory',  # Nuevo jefe pide inventario de URLs a subordinados
         'REPORT_URL_INVENTORY': 'report_url_inventory',  # Subordinados reportan sus URLs al nuevo jefe
+        'UPDATE_URL_CONTENT': 'update_url_content',  # Jefe actualiza contenido de URL en subordinado (consolidación)
+        'DELETE_URL_CONTENT': 'delete_url_content',  # Jefe solicita eliminar URL en subordinado (balanceo de réplicas)
         'SAVE_CONFIRMATION': 'save_confirmation',
         
         # DATABASE VISUALIZATION (Cliente -> Router -> BD)
