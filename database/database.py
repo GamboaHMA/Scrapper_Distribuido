@@ -38,7 +38,10 @@ class DatabaseNode(Node):
     '''
 
     def __init__(self, scrapper_port=8080, router_port=7070):
-        super().__init__(node_type='bd')
+        super().__init__(node_type='bd', use_tls=True,
+                         tls_certfile='certs/server.crt',
+                         tls_keyfile='certs/server.key',
+                         tls_cafile='certs/ca.crt')
 
         #base de datos
         self.name = socket.gethostname()

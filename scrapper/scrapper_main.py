@@ -139,7 +139,10 @@ class ScrapperNode(Node):
     
     def __init__(self, bd_port=9090, router_port=7070):
         # Inicializar clase base con node_type='scrapper'
-        super().__init__(node_type='scrapper')
+        super().__init__(node_type='scrapper', use_tls=True,
+                         tls_certfile='certs/server.crt',
+                         tls_keyfile='certs/server.key',
+                         tls_cafile='certs/ca.crt')
         
         # Puertos adicionales
         self.bd_port = bd_port
