@@ -96,7 +96,7 @@ build-web-client: ## Construir imagen del Cliente Web
 	docker build -t $(WEB_CLIENT_IMAGE) -f web_client/Dockerfile .
 	@echo "$(GREEN)✅ Cliente Web construido$(NC)"
 
-build-all: build-scrapper build-router build-database build-client build-streamlit build-web-client ## Construir todas las imágenes
+build-all: build-scrapper build-router build-database build-client build-web-client ## Construir todas las imágenes
 	@echo "$(GREEN)╔════════════════════════════════════════════════════════════════╗$(NC)"
 	@echo "$(GREEN)║  ✅ Todas las imágenes han sido construidas exitosamente       ║$(NC)"
 	@echo "$(GREEN)╚════════════════════════════════════════════════════════════════╝$(NC)"
@@ -209,16 +209,15 @@ run-web-client: network ## Ejecutar Cliente Web (accesible en http://localhost:8
 	@echo "$(GREEN)✅ Cliente Web iniciado$(NC)"
 	@echo "$(YELLOW)Accede a la interfaz en:$(NC) http://localhost:8080"
 
-run-all: network run-scrappers run-routers run-databases run-client run-streamlit ## Ejecutar todo el sistema (2 scrappers, 2 routers, 2 databases, 1 cliente, UI)
+run-all: network run-scrappers run-routers run-databases run-client run-web-client ## Ejecutar todo el sistema (2 scrappers, 2 routers, 2 databases, 1 cliente, UI)
 	@echo "$(GREEN)╔════════════════════════════════════════════════════════════════╗$(NC)"
 	@echo "$(GREEN)║  ✅ Sistema completo desplegado:                               ║$(NC)"
 	@echo "$(GREEN)║     - 2 ScrapperNodes                                          ║$(NC)"
 	@echo "$(GREEN)║     - 2 RouterNodes                                            ║$(NC)"
 	@echo "$(GREEN)║     - 2 DatabaseNodes                                          ║$(NC)"
 	@echo "$(GREEN)║     - 1 Cliente                                                ║$(NC)"
-	@echo "$(GREEN)║     - 1 Streamlit UI                                           ║$(NC)"
+	@echo "$(GREEN)║     - 1 Cliente Web                                            ║$(NC)"
 	@echo "$(GREEN)╚════════════════════════════════════════════════════════════════╝$(NC)"
-	@echo "$(YELLOW)Interfaz web:$(NC) http://localhost:8501"
 	@echo "$(YELLOW)Para cliente CLI:$(NC) docker exec -it client-1 python /app/client/client.py"
 
 # =============================================================================
@@ -274,6 +273,15 @@ clean-streamlit: ## Detener y eliminar Streamlit UI
 		docker rm $$container 2>/dev/null; \
 	fi
 	@echo "$(GREEN)✅ Streamlit UI limpiado$(NC)"
+
+clean-web-client: ## Detener y eliminar Cliente Web
+	@echo "$(YELLOW)Limpiando Cliente Web...$(NC)"
+	@container=$$(docker ps -aq --filter name=web-client 2>/dev/null); \
+	if [ -n "$$container" ]; then \
+		docker stop $$container 2>/dev/null; \
+		docker rm $$container 2>/dev/null; \
+	fi
+	@echo "$(GREEN)✅ Cliente Web limpiado$(NC)"
 
 clean-all: clean-scrappers clean-routers clean-databases clean-clients clean-streamlit ## Limpiar todos los contenedores
 	@echo "$(GREEN)╔════════════════════════════════════════════════════════════════╗$(NC)"

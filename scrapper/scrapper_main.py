@@ -299,17 +299,31 @@ class ScrapperNode(Node):
             
             scrape_result = get_html_from_url(url)
             
+            # Validar que el scraping fue exitoso y tiene contenido real
+            html_content = scrape_result.get('html', '')
+            links = scrape_result.get('links', [])
+            
+            # Validación estricta: HTML debe tener contenido significativo
+            if not html_content or len(html_content) < 100:
+                raise Exception(f"HTML vacío o sin contenido suficiente (solo {len(html_content)} caracteres)")
+            
+            html_length = len(html_content)
+            links_count = len(links)
+            
             result = {
                 'url': scrape_result['url'],
-                'html_length': len(scrape_result['html']),
-                'links_count': len(scrape_result['links']),
-                'links': scrape_result['links'][:10],
+                'html_length': html_length,
+                'links_count': links_count,
+                'links': links[:10],
                 'status': 'success'
             }
+            
+            logging.info(f"Scraping exitoso: {url} - {html_length} chars, {links_count} links")
             
         except Exception as e:
             logging.error(f"Error en scraping: {e}")
             result = {
+                'url': task_data.get('url', 'unknown'),
                 'status': 'error',
                 'error': str(e)
             }
@@ -340,17 +354,31 @@ class ScrapperNode(Node):
             
             scrape_result = get_html_from_url(url)
             
+            # Validar que el scraping fue exitoso y tiene contenido real
+            html_content = scrape_result.get('html', '')
+            links = scrape_result.get('links', [])
+            
+            # Validación estricta: HTML debe tener contenido significativo
+            if not html_content or len(html_content) < 100:
+                raise Exception(f"HTML vacío o sin contenido suficiente (solo {len(html_content)} caracteres)")
+            
+            html_length = len(html_content)
+            links_count = len(links)
+            
             result = {
                 'url': scrape_result['url'],
-                'html_length': len(scrape_result['html']),
-                'links_count': len(scrape_result['links']),
-                'links': scrape_result['links'][:10],
+                'html_length': html_length,
+                'links_count': links_count,
+                'links': links[:10],
                 'status': 'success'
             }
+            
+            logging.info(f"[JEFE] Scraping exitoso: {url} - {html_length} chars, {links_count} links")
             
         except Exception as e:
             logging.error(f"[JEFE] Error en scraping: {e}")
             result = {
+                'url': task_data.get('url', 'unknown'),
                 'status': 'error',
                 'error': str(e)
             }

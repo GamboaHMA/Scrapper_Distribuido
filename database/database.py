@@ -44,6 +44,7 @@ class DatabaseNode(Node):
         self.name = socket.gethostname()
         self.db_conn = None
         self.db_cursor = None
+        self.db_lock = threading.Lock()  # Lock para operaciones de BD
         self.logs_conn = None
         self.logs_cursor = None
         self.data_dir = f"database/{self.name}"
@@ -149,13 +150,14 @@ class DatabaseNode(Node):
                 # Obtener node_id del jefe para excluirlo
                 # boss_node_id = self.node_id #f"{self.node_type}-{self.ip}:{self.port}"
                 
-                # Consultar subordinados que tienen URLs registradas (excluir al jefe)
-                self.db_cursor.execute('''
-                    SELECT DISTINCT node_id 
-                    FROM url_db_log 
-                    WHERE node_id != ?
-                ''', (self.node_id,))
-                db_subordinates = [row[0] for row in self.db_cursor.fetchall()]
+                with self.db_lock:
+                    # Consultar subordinados que tienen URLs registradas (excluir al jefe)
+                    self.db_cursor.execute('''
+                        SELECT DISTINCT node_id 
+                        FROM url_db_log 
+                        WHERE node_id != ?
+                    ''', (self.node_id,))
+                    db_subordinates = [row[0] for row in self.db_cursor.fetchall()]
                 
                 # Detectar subordinados desconectados
                 for node_id in db_subordinates:
@@ -178,25 +180,26 @@ class DatabaseNode(Node):
         logging.info(f"Manejando desconexión de subordinado: {disconnected_node_id}")
         
         try:
-            # Obtener todas las URLs que tenía este subordinado
-            self.db_cursor.execute('''
-                SELECT DISTINCT url_id 
-                FROM url_db_log 
-                WHERE node_id = ?
-            ''', (disconnected_node_id,))
-            affected_urls = [row[0] for row in self.db_cursor.fetchall()]
-            
-            if not affected_urls:
-                logging.info(f"No hay URLs afectadas por desconexión de {disconnected_node_id}")
-                return
-            
-            logging.info(f"Procesando {len(affected_urls)} URLs afectadas por desconexión")
-            
-            # Eliminar registros del nodo desconectado de url_db_log
-            self.db_cursor.execute('''
-                DELETE FROM url_db_log 
-                WHERE node_id = ?
-            ''', (disconnected_node_id,))
+            with self.db_lock:
+                # Obtener todas las URLs que tenía este subordinado
+                self.db_cursor.execute('''
+                    SELECT DISTINCT url_id 
+                    FROM url_db_log 
+                    WHERE node_id = ?
+                ''', (disconnected_node_id,))
+                affected_urls = [row[0] for row in self.db_cursor.fetchall()]
+                
+                if not affected_urls:
+                    logging.info(f"No hay URLs afectadas por desconexión de {disconnected_node_id}")
+                    return
+                
+                logging.info(f"Procesando {len(affected_urls)} URLs afectadas por desconexión")
+                
+                # Eliminar registros del nodo desconectado de url_db_log
+                self.db_cursor.execute('''
+                    DELETE FROM url_db_log 
+                    WHERE node_id = ?
+                ''', (disconnected_node_id,))
             self.db_conn.commit()
             
             logging.info(f"Registros de {disconnected_node_id} eliminados de url_db_log")
@@ -211,24 +214,26 @@ class DatabaseNode(Node):
                 if self.node_id not in connected_nodes:
                     connected_nodes.append(self.node_id)
                 
-                # Contar réplicas en nodos conectados
-                if connected_nodes:
-                    placeholders = ','.join(['?'] * len(connected_nodes))
-                    self.db_cursor.execute(f'''
-                        SELECT COUNT(DISTINCT node_id)
-                        FROM url_db_log
-                        WHERE url_id = ? AND node_id IN ({placeholders})
-                    ''', (url_id, *connected_nodes))
-                    current_replicas = self.db_cursor.fetchone()[0]
-                else:
-                    current_replicas = 0
-                
-                # Actualizar contador en tabla urls
-                self.db_cursor.execute('''
-                    UPDATE urls 
-                    SET current_replicas = ?
-                    WHERE url_id = ?
-                ''', (current_replicas, url_id))
+                with self.db_lock:
+                    # Contar réplicas en nodos conectados
+                    if connected_nodes:
+                        placeholders = ','.join(['?'] * len(connected_nodes))
+                        self.db_cursor.execute(f'''
+                            SELECT COUNT(DISTINCT node_id)
+                            FROM url_db_log
+                            WHERE url_id = ? AND node_id IN ({placeholders})
+                        ''', (url_id, *connected_nodes))
+                        current_replicas = self.db_cursor.fetchone()[0]
+                    else:
+                        current_replicas = 0
+                    
+                    # Actualizar contador en tabla urls
+                    self.db_cursor.execute('''
+                        UPDATE urls 
+                        SET current_replicas = ?
+                        WHERE url_id = ?
+                    ''', (current_replicas, url_id))
+                    self.db_conn.commit()
                 
                 logging.info(f"URL {url_id} ahora tiene {current_replicas} réplicas (era 1 más antes)")
                 
@@ -237,7 +242,6 @@ class DatabaseNode(Node):
                     logging.info(f"URL {url_id} necesita re-replicación")
                     self._check_and_rereplicate_url(url_id)
             
-            self.db_conn.commit()
             logging.info(f"Desconexión de {disconnected_node_id} procesada completamente")
                 
         except Exception as e:
@@ -267,39 +271,40 @@ class DatabaseNode(Node):
             if exclude_node_id:
                 connected_nodes = [n for n in connected_nodes if n != exclude_node_id]
             
-            # Contar cuántas de esas nodes tienen la URL
-            placeholders = ','.join(['?'] * len(connected_nodes))
-            self.db_cursor.execute(f'''
-                SELECT COUNT(DISTINCT node_id)
-                FROM url_db_log
-                WHERE url_id = ? AND node_id IN ({placeholders})
-            ''', (url_id, *connected_nodes))
-            current_replicas = self.db_cursor.fetchone()[0]
-            
-            target_replicas = 3
-            needed_replicas = target_replicas - current_replicas
-            
-            if needed_replicas <= 0:
-                # Ya hay suficientes réplicas
-                return
-            
-            logging.info(f"URL {url_id} tiene {current_replicas} réplicas, necesita {needed_replicas} más")
-            
-            # Obtener la URL y su contenido de un subordinado activo
-            self.db_cursor.execute('''
-                SELECT u.url, udl.node_id
-                FROM urls u
-                JOIN url_db_log udl ON u.url_id = udl.url_id
-                WHERE u.url_id = ?
-                LIMIT 1
-            ''', (url_id,))
-            url_info = self.db_cursor.fetchone()
-            
-            if not url_info:
-                logging.error(f"No hay réplicas activas para URL {url_id}, no se puede re-replicar")
-                return
-            
-            url, source_node_id = url_info
+            with self.db_lock:
+                # Contar cuántas de esas nodes tienen la URL
+                placeholders = ','.join(['?'] * len(connected_nodes))
+                self.db_cursor.execute(f'''
+                    SELECT COUNT(DISTINCT node_id)
+                    FROM url_db_log
+                    WHERE url_id = ? AND node_id IN ({placeholders})
+                ''', (url_id, *connected_nodes))
+                current_replicas = self.db_cursor.fetchone()[0]
+                
+                target_replicas = 3
+                needed_replicas = target_replicas - current_replicas
+                
+                if needed_replicas <= 0:
+                    # Ya hay suficientes réplicas
+                    return
+                
+                logging.info(f"URL {url_id} tiene {current_replicas} réplicas, necesita {needed_replicas} más")
+                
+                # Obtener la URL y su contenido de un subordinado activo
+                self.db_cursor.execute('''
+                    SELECT u.url, udl.node_id
+                    FROM urls u
+                    JOIN url_db_log udl ON u.url_id = udl.url_id
+                    WHERE u.url_id = ?
+                    LIMIT 1
+                ''', (url_id,))
+                url_info = self.db_cursor.fetchone()
+                
+                if not url_info:
+                    logging.error(f"No hay réplicas activas para URL {url_id}, no se puede re-replicar")
+                    return
+                
+                url, source_node_id = url_info
             
             # Obtener subordinados activos actualmente conectados (excluir el que se está desconectando)
             with self.status_lock:
@@ -307,13 +312,14 @@ class DatabaseNode(Node):
             
             logging.info(f"[REREPLICATE] Subordinados conectados (excluyendo {exclude_node_id}): {connected_node_ids}")
             
-            # Obtener subordinados que NO tienen esta URL Y están conectados
-            self.db_cursor.execute('''
-                SELECT node_id 
-                FROM url_db_log 
-                WHERE url_id = ?
-            ''', (url_id,))
-            nodes_with_url = [row[0] for row in self.db_cursor.fetchall()]
+            with self.db_lock:
+                # Obtener subordinados que NO tienen esta URL Y están conectados
+                self.db_cursor.execute('''
+                    SELECT node_id 
+                    FROM url_db_log 
+                    WHERE url_id = ?
+                ''', (url_id,))
+                nodes_with_url = [row[0] for row in self.db_cursor.fetchall()]
             
             available_subordinates = [nid for nid in connected_node_ids if nid not in nodes_with_url]
             
@@ -1200,28 +1206,29 @@ class DatabaseNode(Node):
         logging.info(f"BD Query recibida para task {task_id}, URL: {url}")
 
         try:
-            # Buscar si la URL ya está registrada
-            self.db_cursor.execute('SELECT url_id FROM urls WHERE url = ?', (url,))
-            result = self.db_cursor.fetchone()
+            with self.db_lock:
+                # Buscar si la URL ya está registrada
+                self.db_cursor.execute('SELECT url_id FROM urls WHERE url = ?', (url,))
+                result = self.db_cursor.fetchone()
 
-            if result is None:
-                # URL no encontrada en BD
-                logging.info(f"URL {url} NO encontrada en BD, responder negativo al Router")
-                self._send_bd_query_response(node_connection, task_id, found=False)
-                return
+                if result is None:
+                    # URL no encontrada en BD
+                    logging.info(f"URL {url} NO encontrada en BD, responder negativo al Router")
+                    self._send_bd_query_response(node_connection, task_id, found=False)
+                    return
 
-            url_id = result[0]
-            logging.info(f"URL {url} encontrada con url_id={url_id}")
+                url_id = result[0]
+                logging.info(f"URL {url} encontrada con url_id={url_id}")
 
-            # Verificar si hay contenido disponible en subordinados
-            self.db_cursor.execute('''
-                SELECT node_id
-                FROM url_db_log
-                WHERE url_id = ?
-                ORDER BY node_id
-            ''', (url_id,))
+                # Verificar si hay contenido disponible en subordinados
+                self.db_cursor.execute('''
+                    SELECT node_id
+                    FROM url_db_log
+                    WHERE url_id = ?
+                    ORDER BY node_id
+                ''', (url_id,))
 
-            databases_with_content = self.db_cursor.fetchall()
+                databases_with_content = self.db_cursor.fetchall()
 
             if len(databases_with_content) == 0:
                 # URL registrada pero sin contenido disponible
@@ -1291,30 +1298,31 @@ class DatabaseNode(Node):
         logging.info(f"URL_QUERY recibida de líder BD: task={task_id}, url={url}")
 
         try:
-            # Buscar contenido en BD local
-            self.db_cursor.execute('SELECT url_id FROM urls WHERE url = ?', (url,))
-            url_id_row = self.db_cursor.fetchone()
+            with self.db_lock:
+                # Buscar contenido en BD local
+                self.db_cursor.execute('SELECT url_id FROM urls WHERE url = ?', (url,))
+                url_id_row = self.db_cursor.fetchone()
 
-            if url_id_row is None:
-                logging.error(f"URL {url} no encontrada en tabla urls del subordinado")
-                # Responder al Router que no se encontró
-                self._send_bd_query_response_to_router(task_id, found=False)
-                return
-            
-            url_id = url_id_row[0]
+                if url_id_row is None:
+                    logging.error(f"URL {url} no encontrada en tabla urls del subordinado")
+                    # Responder al Router que no se encontró
+                    self._send_bd_query_response_to_router(task_id, found=False)
+                    return
+                
+                url_id = url_id_row[0]
 
-            # Obtener contenido
-            self.db_cursor.execute('SELECT content FROM urls WHERE url_id = ?', (url_id,))
-            content_row = self.db_cursor.fetchone()
+                # Obtener contenido
+                self.db_cursor.execute('SELECT content FROM urls WHERE url_id = ?', (url_id,))
+                content_row = self.db_cursor.fetchone()
 
-            if content_row is None:
-                logging.error(f"Contenido no encontrado para url_id={url_id} en subordinado")
-                self._send_bd_query_response_to_router(task_id, found=False)
-                return
-            
-            import json
-            content_json = content_row[0]
-            result = json.loads(content_json)
+                if content_row is None:
+                    logging.error(f"Contenido no encontrado para url_id={url_id} en subordinado")
+                    self._send_bd_query_response_to_router(task_id, found=False)
+                    return
+                
+                import json
+                content_json = content_row[0]
+                result = json.loads(content_json)
             
             logging.info(f"Contenido encontrado para {url}, enviando al Router")
             self._send_bd_query_response_to_router(task_id, found=True, result=result)
@@ -1380,6 +1388,32 @@ class DatabaseNode(Node):
             import traceback
             traceback.print_exc()
 
+    def _notify_router_of_error_result(self, task_id, result):
+        """Notifica al Router de un resultado con error (sin guardar en BD)"""
+        router_profile = self.external_bosses.get('router')
+        
+        if not router_profile or not router_profile.is_connected():
+            logging.warning(f"No hay conexión con Router para notificar error de task {task_id}")
+            return
+        
+        router_conn = router_profile.connection
+        
+        # Enviar BD_QUERY_RESPONSE con el resultado de error
+        # Esto permitirá que el Router notifique al cliente del error
+        response_msg = self._create_message(
+            MessageProtocol.MESSAGE_TYPES['BD_QUERY_RESPONSE'],
+            {
+                'task_id': task_id,
+                'found': True,  # "Encontrado" pero con error
+                'result': result  # Incluye status: 'error' y error: '...'
+            }
+        )
+        
+        if router_conn.send_message(response_msg):
+            logging.info(f"Resultado con error notificado al Router: task={task_id}")
+        else:
+            logging.error(f"No se pudo notificar error al Router: task={task_id}")
+
     def _recive_task_result(self, node_connection, message):
         '''Recibe lo escrapeado de la url directo de un nodo scrapper, y le manda la info
            a tres de las base de datos conectadas (incluyendo el líder), para garantizar replicabilidad de 3'''
@@ -1395,42 +1429,50 @@ class DatabaseNode(Node):
 
         logging.info(f"SAVE_DATA recibido del Scrapper: task={task_id}, url={url}")
 
+        # Verificar si el resultado es un error
+        if result.get('status') == 'error':
+            logging.warning(f"Resultado con error para task {task_id}: {result.get('error')}")
+            # No guardar en BD, pero notificar al Router para que informe al cliente
+            self._notify_router_of_error_result(task_id, result)
+            return
+
         # El líder TAMBIÉN guarda el contenido y se registra a sí mismo
         try:
             import json
             
-            # Insertar URL en tabla urls si no existe
-            self.db_cursor.execute('INSERT OR IGNORE INTO urls (url) VALUES (?)', (url,))
-            self.db_conn.commit()
-
-            # Obtener url_id
-            self.db_cursor.execute('SELECT url_id FROM urls WHERE url = ?', (url,))
-            url_id_row = self.db_cursor.fetchone()
-            if url_id_row:
-                url_id = url_id_row[0]
-                
-                # Serializar resultado como JSON
-                content_json = json.dumps(result)
-
-                # Actualizar contenido en tabla urls
-                self.db_cursor.execute('''
-                    UPDATE urls 
-                    SET content = ?, scrapped_at = ?
-                    WHERE url_id = ?
-                ''', (content_json, completed_at, url_id))
+            with self.db_lock:
+                # Insertar URL en tabla urls si no existe
+                self.db_cursor.execute('INSERT OR IGNORE INTO urls (url) VALUES (?)', (url,))
                 self.db_conn.commit()
 
-                logging.info(f"Líder BD guardó contenido de {url} (url_id={url_id})")
-                
-                # Registrar al jefe en url_db_log (el jefe también almacena contenido)
-                # boss_node_id = f"{self.node_type}-{self.ip}:{self.port}"
-                self.db_cursor.execute('''
-                    INSERT OR IGNORE INTO url_db_log (url_id, node_id)
-                    VALUES (?, ?)
-                ''', (url_id, self.node_id))
-                self.db_conn.commit()
-                
-                logging.info(f"Líder BD se registró en url_db_log para {url}")
+                # Obtener url_id
+                self.db_cursor.execute('SELECT url_id FROM urls WHERE url = ?', (url,))
+                url_id_row = self.db_cursor.fetchone()
+                if url_id_row:
+                    url_id = url_id_row[0]
+                    
+                    # Serializar resultado como JSON
+                    content_json = json.dumps(result)
+
+                    # Actualizar contenido en tabla urls
+                    self.db_cursor.execute('''
+                        UPDATE urls 
+                        SET content = ?, scrapped_at = ?
+                        WHERE url_id = ?
+                    ''', (content_json, completed_at, url_id))
+                    self.db_conn.commit()
+
+                    logging.info(f"Líder BD guardó contenido de {url} (url_id={url_id})")
+                    
+                    # Registrar al jefe en url_db_log (el jefe también almacena contenido)
+                    # boss_node_id = f"{self.node_type}-{self.ip}:{self.port}"
+                    self.db_cursor.execute('''
+                        INSERT OR IGNORE INTO url_db_log (url_id, node_id)
+                        VALUES (?, ?)
+                    ''', (url_id, self.node_id))
+                    self.db_conn.commit()
+                    
+                    logging.info(f"Líder BD se registró en url_db_log para {url}")
         except Exception as e:
             logging.error(f"Error guardando contenido en líder: {e}")
 
@@ -1492,30 +1534,31 @@ class DatabaseNode(Node):
         try:
             import json
             
-            # Insertar URL en tabla urls si no existe
-            self.db_cursor.execute('INSERT OR IGNORE INTO urls (url) VALUES (?)', (url,))
-            self.db_conn.commit()
+            with self.db_lock:
+                # Insertar URL en tabla urls si no existe
+                self.db_cursor.execute('INSERT OR IGNORE INTO urls (url) VALUES (?)', (url,))
+                self.db_conn.commit()
 
-            # Obtener url_id
-            self.db_cursor.execute('SELECT url_id FROM urls WHERE url = ?', (url,))
-            url_id_row = self.db_cursor.fetchone()
-            if not url_id_row:
-                logging.error(f"No se pudo obtener url_id para {url}")
-                return
-            url_id = url_id_row[0]
+                # Obtener url_id
+                self.db_cursor.execute('SELECT url_id FROM urls WHERE url = ?', (url,))
+                url_id_row = self.db_cursor.fetchone()
+                if not url_id_row:
+                    logging.error(f"No se pudo obtener url_id para {url}")
+                    return
+                url_id = url_id_row[0]
 
-            # Serializar resultado como JSON
-            content_json = json.dumps(result)
+                # Serializar resultado como JSON
+                content_json = json.dumps(result)
 
-            # Actualizar contenido en tabla urls
-            self.db_cursor.execute('''
-                UPDATE urls 
-                SET content = ?, scrapped_at = ?
-                WHERE url_id = ?
-            ''', (content_json, completed_at, url_id))
-            self.db_conn.commit()
+                # Actualizar contenido en tabla urls
+                self.db_cursor.execute('''
+                    UPDATE urls 
+                    SET content = ?, scrapped_at = ?
+                    WHERE url_id = ?
+                ''', (content_json, completed_at, url_id))
+                self.db_conn.commit()
 
-            logging.info(f"Subordinado BD guardó contenido de {url} (url_id={url_id})")
+                logging.info(f"Subordinado BD guardó contenido de {url} (url_id={url_id})")
         except Exception as e:
             logging.error(f"Error en subordinado almacenando URL {url}: {e}")
         

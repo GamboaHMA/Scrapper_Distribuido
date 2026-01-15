@@ -507,20 +507,25 @@ class RouterNode(Node):
                 logging.error(f"No hay conexión para responder task {task_id}")
                 return
         
+        # Determinar si fue exitoso basándose en el status del resultado
+        # El resultado puede venir de BD o de Scrapper
+        result_status = result.get('status', 'success') if isinstance(result, dict) else 'success'
+        is_success = result_status != 'error'
+        
         # Crear respuesta
         response = self._create_message(
             MessageProtocol.MESSAGE_TYPES['TASK_RESULT'],
             {
                 'task_id': task_id,
                 'result': result,
-                'success': True
+                'success': is_success
             }
         )
         
         try:
             # Enviar respuesta a través de la conexión persistente
             client_connection.send_message(response)
-            logging.info(f"Respuesta enviada al cliente {client_connection.node_id} para task {task_id}")
+            logging.info(f"Respuesta enviada al cliente {client_connection.node_id} para task {task_id} (success={is_success})")
             
         except Exception as e:
             logging.error(f"Error enviando respuesta al cliente: {e}")
