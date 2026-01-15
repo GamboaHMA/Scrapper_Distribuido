@@ -833,6 +833,24 @@ class RouterNode(Node):
         ).start()
         
         logging.info("✓ Jefe Router operativo")
+    
+    def stop_boss_tasks(self):
+        """
+        Detiene las tareas específicas del jefe Router.
+        Se llama cuando el nodo cede el rol de jefe.
+        """
+        logging.info("=== DETENIENDO TAREAS DEL JEFE ROUTER ===")
+        
+        # El thread de procesamiento de tareas es daemon y verifica self.running
+        # Al cambiar i_am_boss, las tareas ya no se procesarán adecuadamente
+        logging.info("El loop de procesamiento de tareas se detendrá")
+        
+        # Limpiar cola de tareas pendientes
+        pending_count = self.task_queue.get_stats()['pending']
+        if pending_count > 0:
+            logging.warning(f"Dejando {pending_count} tareas pendientes (el nuevo jefe las manejará)")
+        
+        logging.info("✓ Tareas de jefe Router detenidas")
 
     def _handle_list_tables_request(self, node_connection, message):
         """

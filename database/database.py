@@ -118,6 +118,9 @@ class DatabaseNode(Node):
         # 2.5: Registrar las URLs que el jefe tiene en su propia url_content
         self._register_own_urls_in_log()
         
+        # 2.7: Consolidar URLs duplicadas manteniendo contenido más antiguo
+        self._consolidate_duplicate_urls()
+        
         # SEGUNDO: Redistribuir URLs que este nodo tenía cuando era subordinado
         self._redistribute_own_urls()
         
@@ -132,6 +135,19 @@ class DatabaseNode(Node):
         ).start()
         
         logging.info("Tareas de jefe BD iniciadas correctamente")
+    
+    def stop_boss_tasks(self):
+        """
+        Detiene las tareas específicas del jefe BD.
+        Se llama cuando el nodo cede el rol de jefe.
+        """
+        logging.info("=== DETENIENDO TAREAS DEL JEFE BD ===")
+        
+        # El thread de monitoreo es daemon y verifica self.i_am_boss
+        # Al cambiar i_am_boss a False, el loop se detendrá automáticamente
+        logging.info("El monitor de subordinados se detendrá automáticamente")
+        
+        logging.info("✓ Tareas de jefe BD detenidas")
 
     def _monitor_subordinates_health(self):
         """Monitor periódico para detectar subordinados desconectados y re-replicar datos"""
@@ -248,6 +264,19 @@ class DatabaseNode(Node):
             logging.error(f"Error manejando desconexión de {disconnected_node_id}: {e}")
             import traceback
             traceback.print_exc()
+    
+    def _on_subordinate_inherited_from_conflict(self, subordinate_node_id):
+        """
+        Override: Se llama cuando se hereda un subordinado de otro jefe en conflicto.
+        En el caso de BD, necesitamos consolidar URLs duplicadas.
+        
+        Args:
+            subordinate_node_id (str): ID del subordinado heredado
+        """
+        logging.info(f"🔄 Subordinado BD heredado: {subordinate_node_id}. Iniciando consolidación de URLs...")
+        
+        # Dar un breve momento para que el subordinado se estabilice
+        threading.Timer(2.0, self._consolidate_duplicate_urls).start()
 
     def _check_and_rereplicate_url(self, url_id, exclude_node_id=None):
         """
@@ -769,6 +798,288 @@ class DatabaseNode(Node):
             logging.error(f"Error registrando URLs propias: {e}")
             import traceback
             traceback.print_exc()
+    
+    def _consolidate_duplicate_urls(self):
+        """
+        Consolida URLs duplicadas entre subordinados manteniendo el contenido más reciente.
+        
+        Cuando dos clusters independientes se fusionan, pueden tener la misma URL
+        con diferentes contenidos. Este método:
+        1. Identifica URLs duplicadas (mismo URL, diferentes scrapped_at)
+        2. Mantiene el contenido con la fecha más reciente
+        3. Actualiza todos los nodos que tengan versiones más antiguas
+        """
+        logging.info("=" * 60)
+        logging.info("CONSOLIDACIÓN: Detectando y resolviendo URLs duplicadas")
+        logging.info("=" * 60)
+        
+        try:
+            # Recolectar información de todas las URLs con contenido de todos los nodos
+            # Estructura: {url: [(node_id, scrapped_at, content), ...]}
+            url_versions = {}
+            
+            # 1. Incluir las URLs del jefe
+            self.db_cursor.execute('''
+                SELECT url, scrapped_at, content
+                FROM urls
+                WHERE content IS NOT NULL AND scrapped_at IS NOT NULL
+            ''')
+            
+            for url, scrapped_at, content in self.db_cursor.fetchall():
+                if url not in url_versions:
+                    url_versions[url] = []
+                url_versions[url].append((self.node_id, scrapped_at, content))
+            
+            # 2. Solicitar información detallada de subordinados
+            logging.info(f"Solicitando información de URLs a subordinados...")
+            
+            with self.status_lock:
+                subordinate_list = list(self.subordinates.items())
+            
+            # Usar el mecanismo de inventario existente
+            self.inventory_responses = {}
+            self.inventory_complete = threading.Event()
+            
+            request_message = self._create_message(
+                MessageProtocol.MESSAGE_TYPES['REQUEST_URL_INVENTORY'],
+                {}
+            )
+            
+            for node_id, conn in subordinate_list:
+                try:
+                    conn.send_message(request_message)
+                    self.inventory_responses[node_id] = None
+                except Exception as e:
+                    logging.error(f"Error solicitando inventario a {node_id}: {e}")
+            
+            # Esperar respuestas
+            self.inventory_complete.wait(timeout=10)
+            
+            # 3. Agregar información de subordinados
+            for node_id, urls in self.inventory_responses.items():
+                if urls is None:
+                    continue
+                
+                for url_info in urls:
+                    url = url_info['url']
+                    scrapped_at = url_info.get('scrapped_at')
+                    content = url_info.get('content')
+                    
+                    if content and scrapped_at:
+                        if url not in url_versions:
+                            url_versions[url] = []
+                        url_versions[url].append((node_id, scrapped_at, content))
+            
+            # 4. Detectar y resolver duplicados
+            duplicates_found = 0
+            updates_needed = 0
+            
+            for url, versions in url_versions.items():
+                if len(versions) <= 1:
+                    continue  # No hay duplicados
+                
+                # Ordenar por fecha (más reciente primero)
+                versions.sort(key=lambda x: x[1], reverse=True)  # x[1] es scrapped_at
+                
+                newest_node, newest_date, newest_content = versions[0]
+                
+                # Verificar si hay versiones diferentes
+                has_different_versions = any(
+                    version[1] != newest_date or version[2] != newest_content
+                    for version in versions[1:]
+                )
+                
+                if not has_different_versions:
+                    continue  # Todas las versiones son iguales
+                
+                duplicates_found += 1
+                logging.warning(f"⚠️  URL duplicada detectada: {url}")
+                logging.warning(f"   Versión más reciente: {newest_date} (nodo: {newest_node})")
+                logging.warning(f"   Versiones más antiguas: {len(versions) - 1}")
+                
+                # 5. Actualizar todos los nodos que tengan versiones más antiguas
+                for node_id, scrapped_at, content in versions[1:]:
+                    if scrapped_at != newest_date or content != newest_content:
+                        updates_needed += 1
+                        logging.info(f"   → Actualizando {node_id} con versión más reciente")
+                        
+                        # Enviar UPDATE_URL_CONTENT a ese nodo
+                        if node_id == self.node_id:
+                            # Actualizar mi propia BD
+                            self._update_own_url_content(url, newest_content, newest_date)
+                        else:
+                            # Enviar mensaje al subordinado
+                            self._send_url_update_to_subordinate(
+                                node_id, url, newest_content, newest_date
+                            )
+            
+            # Resumen
+            logging.info("=" * 60)
+            logging.info(f"CONSOLIDACIÓN COMPLETADA:")
+            logging.info(f"  - URLs analizadas: {len(url_versions)}")
+            logging.info(f"  - Duplicados encontrados: {duplicates_found}")
+            logging.info(f"  - Actualizaciones realizadas: {updates_needed}")
+            logging.info("=" * 60)
+            
+            # 6. Verificar y balancear réplicas (eliminar excesos)
+            logging.info("=" * 60)
+            logging.info("BALANCEO: Verificando y ajustando número de réplicas")
+            logging.info("=" * 60)
+            self._balance_replica_count(url_versions)
+            
+        except Exception as e:
+            logging.error(f"Error consolidando URLs duplicadas: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    def _balance_replica_count(self, url_versions):
+        """
+        Balancea el número de réplicas para cada URL.
+        Si hay más de target_replicas (3), elimina réplicas al azar hasta tener exactamente 3.
+        
+        Args:
+            url_versions: Dict {url: [(node_id, scrapped_at, content), ...]}
+        """
+        target_replicas = 3
+        excess_removed = 0
+        
+        try:
+            for url, versions in url_versions.items():
+                current_replicas = len(versions)
+                
+                if current_replicas <= target_replicas:
+                    continue  # No hay exceso
+                
+                excess = current_replicas - target_replicas
+                logging.warning(f"⚠️  URL {url} tiene {current_replicas} réplicas (exceso: {excess})")
+                
+                # Seleccionar nodos al azar para eliminar
+                # Hacer una copia para no modificar el original
+                import random
+                nodes_to_remove = random.sample(versions, excess)
+                
+                logging.info(f"   → Eliminando {excess} réplicas al azar...")
+                
+                for node_id, _, _ in nodes_to_remove:
+                    excess_removed += 1
+                    logging.info(f"   → Eliminando réplica de {node_id}")
+                    
+                    if node_id == self.node_id:
+                        # Eliminar de mi propia BD
+                        self._delete_own_url_content(url)
+                    else:
+                        # Enviar mensaje al subordinado
+                        self._send_url_deletion_to_subordinate(node_id, url)
+            
+            # Resumen
+            logging.info("=" * 60)
+            logging.info(f"BALANCEO COMPLETADO:")
+            logging.info(f"  - Réplicas excesivas eliminadas: {excess_removed}")
+            logging.info("=" * 60)
+            
+        except Exception as e:
+            logging.error(f"Error balanceando réplicas: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    def _delete_own_url_content(self, url):
+        """Elimina una URL de la BD del jefe"""
+        try:
+            with self.db_lock:
+                # Obtener url_id antes de eliminar
+                self.db_cursor.execute('SELECT url_id FROM urls WHERE url = ?', (url,))
+                result = self.db_cursor.fetchone()
+                
+                if not result:
+                    logging.warning(f"URL {url} no encontrada para eliminar")
+                    return
+                
+                url_id = result[0]
+                
+                # Eliminar de url_db_log
+                self.db_cursor.execute('''
+                    DELETE FROM url_db_log
+                    WHERE url_id = ? AND node_id = ?
+                ''', (url_id, self.node_id))
+                
+                # Eliminar contenido de urls (pero mantener el registro si hay otras réplicas)
+                # Verificar si hay otras réplicas
+                self.db_cursor.execute('''
+                    SELECT COUNT(*) FROM url_db_log WHERE url_id = ?
+                ''', (url_id,))
+                remaining_replicas = self.db_cursor.fetchone()[0]
+                
+                if remaining_replicas == 0:
+                    # No hay más réplicas, eliminar completamente
+                    self.db_cursor.execute('DELETE FROM urls WHERE url_id = ?', (url_id,))
+                    logging.info(f"✓ URL {url} eliminada completamente (última réplica)")
+                else:
+                    # Hay otras réplicas, solo limpiar contenido local si es necesario
+                    logging.info(f"✓ Réplica local de {url} eliminada ({remaining_replicas} réplicas restantes)")
+                
+                self.db_conn.commit()
+                
+        except Exception as e:
+            logging.error(f"Error eliminando contenido local de {url}: {e}")
+    
+    def _send_url_deletion_to_subordinate(self, node_id, url):
+        """Envía solicitud de eliminación de URL a un subordinado"""
+        try:
+            with self.status_lock:
+                conn = self.subordinates.get(node_id)
+            
+            if not conn:
+                logging.error(f"Subordinado {node_id} no encontrado para eliminar {url}")
+                return
+            
+            delete_message = self._create_message(
+                MessageProtocol.MESSAGE_TYPES['DELETE_URL_CONTENT'],
+                {'url': url}
+            )
+            
+            conn.send_message(delete_message)
+            logging.info(f"✓ Solicitud de eliminación enviada a {node_id} para {url}")
+            
+        except Exception as e:
+            logging.error(f"Error enviando eliminación a {node_id} para {url}: {e}")
+    
+    def _update_own_url_content(self, url, content, scrapped_at):
+        """Actualiza el contenido de una URL en la BD del jefe"""
+        try:
+            self.db_cursor.execute('''
+                UPDATE urls
+                SET content = ?, scrapped_at = ?
+                WHERE url = ?
+            ''', (content, scrapped_at, url))
+            self.db_conn.commit()
+            logging.info(f"✓ Contenido actualizado localmente para {url}")
+        except Exception as e:
+            logging.error(f"Error actualizando contenido local de {url}: {e}")
+    
+    def _send_url_update_to_subordinate(self, node_id, url, content, scrapped_at):
+        """Envía actualización de contenido a un subordinado"""
+        try:
+            with self.status_lock:
+                conn = self.subordinates.get(node_id)
+            
+            if not conn:
+                logging.error(f"Subordinado {node_id} no encontrado para actualizar {url}")
+                return
+            
+            update_message = self._create_message(
+                MessageProtocol.MESSAGE_TYPES['UPDATE_URL_CONTENT'],
+                {
+                    'url': url,
+                    'content': content,
+                    'scrapped_at': scrapped_at
+                }
+            )
+            
+            conn.send_message(update_message)
+            logging.info(f"✓ Actualización enviada a {node_id} para {url}")
+            
+        except Exception as e:
+            logging.error(f"Error enviando actualización a {node_id} para {url}: {e}")
 
     def _redistribute_own_urls(self):
         """
@@ -1095,6 +1406,18 @@ class DatabaseNode(Node):
         self.add_persistent_message_handler(
             MessageProtocol.MESSAGE_TYPES['GET_TABLE_DATA'],
             self._handle_get_table_data
+        )
+        
+        # Handler para actualizar contenido de URL (consolidación)
+        self.add_persistent_message_handler(
+            MessageProtocol.MESSAGE_TYPES['UPDATE_URL_CONTENT'],
+            self._handle_update_url_content
+        )
+        
+        # Handler para eliminar contenido de URL (balanceo de réplicas)
+        self.add_persistent_message_handler(
+            MessageProtocol.MESSAGE_TYPES['DELETE_URL_CONTENT'],
+            self._handle_delete_url_content
         )
 
     def init_database(self):
@@ -1946,6 +2269,109 @@ class DatabaseNode(Node):
                 }
             }
             node_connection.send_message(response)
+    
+    def _handle_update_url_content(self, node_connection, message):
+        """
+        Handler para recibir actualizaciones de contenido de URLs.
+        Se usa durante la consolidación de URLs duplicadas.
+        
+        Args:
+            node_connection: Conexión con el nodo que envía la actualización (jefe)
+            message: Mensaje con la actualización
+        """
+        data = message.get('data', {})
+        url = data.get('url')
+        content = data.get('content')
+        scrapped_at = data.get('scrapped_at')
+        
+        if not url or not content or not scrapped_at:
+            logging.error("UPDATE_URL_CONTENT recibido con datos incompletos")
+            return
+        
+        logging.info(f"UPDATE_URL_CONTENT recibido para URL: {url}")
+        
+        try:
+            with self.db_lock:
+                # Actualizar el contenido de la URL
+                self.db_cursor.execute('''
+                    UPDATE urls
+                    SET content = ?, scrapped_at = ?
+                    WHERE url = ?
+                ''', (content, scrapped_at, url))
+                
+                affected = self.db_cursor.rowcount
+                self.db_conn.commit()
+                
+                if affected > 0:
+                    logging.info(f"✓ Contenido de {url} actualizado exitosamente (fecha: {scrapped_at})")
+                else:
+                    logging.warning(f"URL {url} no encontrada en la BD, insertándola...")
+                    # Si no existe, insertarla
+                    self.db_cursor.execute('''
+                        INSERT INTO urls (url, content, scrapped_at)
+                        VALUES (?, ?, ?)
+                    ''', (url, content, scrapped_at))
+                    self.db_conn.commit()
+                    logging.info(f"✓ URL {url} insertada con contenido actualizado")
+        
+        except Exception as e:
+            logging.error(f"Error actualizando contenido de {url}: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    def _handle_delete_url_content(self, node_connection, message):
+        """
+        Handler para recibir solicitudes de eliminación de URLs.
+        Se usa durante el balanceo de réplicas cuando hay exceso.
+        
+        Args:
+            node_connection: Conexión con el nodo que envía la solicitud (jefe)
+            message: Mensaje con la solicitud de eliminación
+        """
+        data = message.get('data', {})
+        url = data.get('url')
+        
+        if not url:
+            logging.error("DELETE_URL_CONTENT recibido sin URL")
+            return
+        
+        logging.info(f"DELETE_URL_CONTENT recibido para URL: {url}")
+        
+        try:
+            with self.db_lock:
+                # Obtener url_id
+                self.db_cursor.execute('SELECT url_id FROM urls WHERE url = ?', (url,))
+                result = self.db_cursor.fetchone()
+                
+                if not result:
+                    logging.warning(f"URL {url} no encontrada para eliminar")
+                    return
+                
+                url_id = result[0]
+                
+                # Eliminar de url_db_log para este nodo
+                self.db_cursor.execute('''
+                    DELETE FROM url_db_log
+                    WHERE url_id = ? AND node_id = ?
+                ''', (url_id, self.node_id))
+                
+                # Eliminar contenido de urls
+                self.db_cursor.execute('''
+                    DELETE FROM urls WHERE url_id = ?
+                ''', (url_id,))
+                
+                affected = self.db_cursor.rowcount
+                self.db_conn.commit()
+                
+                if affected > 0:
+                    logging.info(f"✓ URL {url} eliminada exitosamente (balanceo de réplicas)")
+                else:
+                    logging.warning(f"URL {url} ya estaba eliminada")
+        
+        except Exception as e:
+            logging.error(f"Error eliminando {url}: {e}")
+            import traceback
+            traceback.print_exc()
 
 
 if __name__ == "__main__":

@@ -816,6 +816,26 @@ class ScrapperNode(Node):
         self._connect_to_external_bosses()
         self._start_task_assignment_thread()
         logging.info("✓ Jefe Scrapper operativo")
+    
+    def stop_boss_tasks(self):
+        """
+        Detiene las tareas específicas del jefe Scrapper.
+        Se llama cuando el nodo cede el rol de jefe.
+        """
+        logging.info("=== DETENIENDO TAREAS DEL JEFE SCRAPPER ===")
+        
+        # El thread task_assignment_thread es daemon y verifica self.i_am_boss
+        # Al cambiar i_am_boss a False, el loop se detendrá automáticamente
+        if self.task_assignment_thread and self.task_assignment_thread.is_alive():
+            logging.info("Esperando a que termine el hilo de asignación de tareas...")
+            # El loop verificará i_am_boss=False y terminará
+        
+        # Limpiar la cola de tareas pendientes (ya no soy responsable)
+        pending_count = self.task_queue.get_stats()['pending']
+        if pending_count > 0:
+            logging.warning(f"Dejando {pending_count} tareas pendientes (el nuevo jefe las manejará)")
+        
+        logging.info("✓ Tareas de jefe Scrapper detenidas")
 
 
 
