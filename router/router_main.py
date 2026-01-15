@@ -105,7 +105,10 @@ class RouterNode(Node):
             port (int): Puerto para escuchar conexiones
             log_level (str): Nivel de logging
         """
-        super().__init__(node_type='router')
+        super().__init__(node_type='router', use_tls=True,
+                        tls_certfile='certs/server.crt',
+                        tls_keyfile='certs/server.key',
+                        tls_cafile='certs/ca.crt')
         
         # Cola de tareas
         self.task_queue = TaskQueue()

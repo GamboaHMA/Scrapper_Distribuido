@@ -1,4 +1,5 @@
 import socket
+import ssl
 import json
 import threading
 import queue
@@ -13,7 +14,8 @@ class NodeConnection:
     Maneja tanto el envío como la recepción de mensajes de forma asíncrona.
     """
     
-    def __init__(self, node_type, ip, port, on_message_callback=None, sender_node_type=None, sender_id=None):
+    def __init__(self, node_type, ip, port, on_message_callback=None, sender_node_type=None, sender_id=None,
+                 use_tls=False, tls_cafile=None, tls_certfile=None, tls_keyfile=None):
         """
         Inicializa una conexión con un nodo.
         
@@ -56,7 +58,12 @@ class NodeConnection:
         self.is_busy = False
         self.estado = "desconectado"  # "desconectado", "conectado", "ocupado"
         self.metadata = {}  # Diccionario para datos adicionales
-        
+        # TLS options (provided by caller)
+        self.use_tls = bool(use_tls)
+        self.tls_cafile = tls_cafile
+        self.tls_certfile = tls_certfile
+        self.tls_keyfile = tls_keyfile
+
         logging.debug(f"NodeConnection creada para {self.node_id}")
     
     def connect(self, existing_socket=None):
@@ -79,9 +86,48 @@ class NodeConnection:
                 if existing_socket:
                     self.socket = existing_socket
                 else:
-                    self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                    self.socket.settimeout(5)
-                    self.socket.connect((self.ip, self.port))
+                    raw_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    raw_sock.settimeout(5)
+                    raw_sock.connect((self.ip, self.port))
+
+                    if self.use_tls:
+                        logging.info(f"self.use_tls True")
+                        # Client-side TLS
+                        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+                        if self.tls_cafile:
+                            try:
+                                ctx.load_verify_locations(self.tls_cafile)
+                                ctx.verify_mode = ssl.CERT_REQUIRED
+                            except Exception as e:
+                                logging.warning(f"No se pudo cargar cafile {self.tls_cafile}: {e}. Continuando sin verificación.")
+                                ctx.check_hostname = False
+                                ctx.verify_mode = ssl.CERT_NONE
+                        else:
+                            # No CA specified: do not verify (useful for dev)
+                            logging.warning("USE_TLS habilitado en NodeConnection pero no se proporcionó tls_cafile: no se verificará el certificado del servidor.")
+                            ctx.check_hostname = False
+                            ctx.verify_mode = ssl.CERT_NONE
+
+                        # Por defecto, desactivar check_hostname porque usamos IPs en la mayoría de casos
+                        ctx.check_hostname = False
+
+                        try:
+                            # Evitar check_hostname por defecto cuando se usan IPs; si se quiere hostname verification, pasar server_hostname adecuado
+                            # Si el usuario proporcionó cert+key para autenticación mutua, cargarlas
+                            if self.tls_certfile and self.tls_keyfile:
+                                try:
+                                    ctx.load_cert_chain(certfile=self.tls_certfile, keyfile=self.tls_keyfile)
+                                    logging.debug("Certificado cliente cargado en contexto TLS")
+                                except Exception as e:
+                                    logging.warning(f"No se pudo cargar cert/key cliente: {e}")
+
+                            # No usar server_hostname cuando trabajamos por IP (evita error check_hostname requires server_hostname)
+                            self.socket = ctx.wrap_socket(raw_sock, server_hostname=None)
+                        except Exception:
+                            raw_sock.close()
+                            raise
+                    else:
+                        self.socket = raw_sock
                 
                 self.connected = True
                 self.estado = "conectado"
