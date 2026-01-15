@@ -287,7 +287,7 @@ class ScrapperNode(Node):
         ).start()
     
     def _execute_task(self, node_connection, task_id, task_data):
-        """Ejecuta una tarea de scraping"""
+        """Ejecuta una tarea de scraping (subordinado)"""
         self.update_busy_status(True)
         
         try:
@@ -327,19 +327,67 @@ class ScrapperNode(Node):
         
         self.update_busy_status(False)
     
+    def _execute_task_as_boss(self, task_id, task_data):
+        """Ejecuta una tarea de scraping (jefe se auto-asigna)"""
+        self.update_busy_status(True)
+        
+        try:
+            if not isinstance(task_data, dict) or 'url' not in task_data:
+                raise Exception("Formato de tarea inválido")
+            
+            url = task_data['url']
+            logging.info(f"[JEFE] Scraping: {url}")
+            
+            scrape_result = get_html_from_url(url)
+            
+            result = {
+                'url': scrape_result['url'],
+                'html_length': len(scrape_result['html']),
+                'links_count': len(scrape_result['links']),
+                'links': scrape_result['links'][:10],
+                'status': 'success'
+            }
+            
+        except Exception as e:
+            logging.error(f"[JEFE] Error en scraping: {e}")
+            result = {
+                'status': 'error',
+                'error': str(e)
+            }
+        
+        # Completar tarea internamente (sin enviar mensaje a sí mismo)
+        self.task_queue.complete_task(task_id, result)
+        logging.info(f"[JEFE] Tarea {task_id} completada internamente")
+        
+        # Enviar resultado a BD
+        self._send_result_to_database(task_id, result)
+        
+        # Notificar al router
+        self._notify_router_task_completed(task_id, result)
+        
+        # Actualizar estado (esto también intentará asignar más tareas)
+        self.update_busy_status(False)
+        
+        # Si soy jefe y ahora estoy libre, intentar asignar más tareas
+        if self.i_am_boss and not self.is_busy:
+            # Pequeño delay para asegurar que el estado se actualizó
+            threading.Timer(0.1, self._try_assign_pending_tasks).start()
+    
     def update_busy_status(self, is_busy):
         """Actualiza el estado de ocupado"""
         with self.status_lock:
             self.is_busy = is_busy
             logging.info(f"Estado actualizado a: {'ocupado' if is_busy else 'libre'}")
             
-            # Notificar al jefe
+            # Notificar al jefe (si soy subordinado)
             if self.boss_connection and self.boss_connection.is_connected():
                 status_msg = self._create_message(
                     MessageProtocol.MESSAGE_TYPES['STATUS_UPDATE'],
                     {'is_busy': self.is_busy}
                 )
                 self.boss_connection.send_message(status_msg)
+        
+        
     
     def _handle_new_task_from_router(self, node_connection, message_dict):
         """Handler para cuando el router envía una nueva tarea (solo jefe)"""
@@ -419,62 +467,86 @@ class ScrapperNode(Node):
             logging.error(f"No se pudo devolver tarea {task_id} a la cola")
     
     def _try_assign_pending_tasks(self):
-        """Asigna tareas pendientes a subordinados disponibles (Round-Robin)"""
+        """Asigna tareas pendientes a subordinados disponibles y al jefe (Round-Robin)"""
         if not self.i_am_boss:
             return
         
-        # Obtener subordinados disponibles
-        available_subordinates = [
-            (node_id, conn) for node_id, conn in self.subordinates.items()
-            if conn.is_connected() and not conn.is_busy
-        ]
+        # Obtener lista de trabajadores disponibles (subordinados + jefe)
+        available_workers = []
         
-        if not available_subordinates:
-            logging.debug("No hay subordinados disponibles para asignar tareas")
+        # Agregar subordinados disponibles
+        for node_id, conn in self.subordinates.items():
+            if conn.is_connected() and not conn.is_busy:
+                available_workers.append(('subordinate', node_id, conn))
+        
+        # Agregar el jefe si está disponible
+        if not self.is_busy:
+            available_workers.append(('boss', self.node_id, None))
+        
+        if not available_workers:
+            logging.debug("No hay trabajadores disponibles para asignar tareas")
             return
         
         # Asignar tareas
         assigned_count = 0
-        while available_subordinates:
+        while available_workers:
             task_id, task_data = self.task_queue.get_next_task()
             
             if not task_id:
                 break
             
-            # Round-robin
+            # Round-robin entre todos los trabajadores
             with self.round_robin_lock:
-                subordinate_list = list(available_subordinates)
-                if not subordinate_list:
+                worker_list = list(available_workers)
+                if not worker_list:
                     break
                 
-                index = assigned_count % len(subordinate_list)
-                node_id, conn = subordinate_list[index]
+                index = assigned_count % len(worker_list)
+                worker_type, node_id, conn = worker_list[index]
             
             # Asignar tarea
             self.task_queue.assign_task(task_id, node_id)
             
-            task_msg = self._create_message(
-                MessageProtocol.MESSAGE_TYPES['TASK_ASSIGNMENT'],
-                {
-                    'task_id': task_id,
-                    'task_data': task_data
-                }
-            )
-            
-            success = conn.send_message(task_msg)
-            
-            if success:
-                conn.is_busy = True
-                logging.info(f"Tarea {task_id} asignada a {node_id} (Round-Robin)")
+            if worker_type == 'boss':
+                # El jefe se auto-asigna la tarea
+                logging.info(f"Tarea {task_id} auto-asignada al jefe (Round-Robin)")
                 assigned_count += 1
                 
-                # Quitar de disponibles
-                available_subordinates = [
-                    (nid, c) for nid, c in available_subordinates if nid != node_id
+                # Ejecutar en hilo separado
+                threading.Thread(
+                    target=self._execute_task_as_boss,
+                    args=(task_id, task_data),
+                    daemon=True
+                ).start()
+                
+                # Quitar al jefe de disponibles
+                available_workers = [
+                    (wt, nid, c) for wt, nid, c in available_workers if wt != 'boss'
                 ]
             else:
-                logging.error(f"No se pudo enviar tarea {task_id} a {node_id}")
-                self.task_queue.fail_task(task_id)
+                # Asignar a subordinado
+                task_msg = self._create_message(
+                    MessageProtocol.MESSAGE_TYPES['TASK_ASSIGNMENT'],
+                    {
+                        'task_id': task_id,
+                        'task_data': task_data
+                    }
+                )
+                
+                success = conn.send_message(task_msg)
+                
+                if success:
+                    conn.is_busy = True
+                    logging.info(f"Tarea {task_id} asignada a {node_id} (Round-Robin)")
+                    assigned_count += 1
+                    
+                    # Quitar de disponibles
+                    available_workers = [
+                        (wt, nid, c) for wt, nid, c in available_workers if nid != node_id
+                    ]
+                else:
+                    logging.error(f"No se pudo enviar tarea {task_id} a {node_id}")
+                    self.task_queue.fail_task(task_id)
         
         if assigned_count > 0:
             stats = self.task_queue.get_stats()

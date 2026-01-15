@@ -1,0 +1,3 @@
+- Hacer q scrapper reporte errores, o sea, paginas q no pudo scrappear, q las retorne con el error.
+- Hacer el mecanismo de unificacion de dos microsistemas (luego de dividirse en dos microsistemas, cuandos e conecten las pcs de nuevo, como fusionar eso.)
+- Arreglar detalle de la interfaz visual.
