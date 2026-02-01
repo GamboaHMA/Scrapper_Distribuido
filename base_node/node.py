@@ -61,13 +61,17 @@ class Node:
         self.listen_socket = None
         self.listen_thread = None
         
-        # Hilo de monitoreo de heartbeats
-        self.heartbeat_monitor_thread = None
-        self.heartbeat_timeout = 90  # segundos sin heartbeat antes de considerar muerto
-        self.heartbeat_check_interval = 30  # revisar cada 30 segundos
+        # Thread de monitoreo de conexiones
+        self.connection_monitor_thread = None
+        self.connection_monitor_stop_event = threading.Event()
+        self.connection_check_interval = 10  # Verificar cada 10 segundos
+        
+        # # Hilo de monitoreo de heartbeats
+        # self.heartbeat_monitor_thread = None
+        # self.heartbeat_timeout = 40  # segundos sin heartbeat antes de considerar muerto
+        # self.heartbeat_check_interval = 30  # revisar cada 30 segundos
         
         self.persistent_message_handler = {
-            MessageProtocol.MESSAGE_TYPES['HEARTBEAT']: self._handle_heartbeat,
             MessageProtocol.MESSAGE_TYPES['IDENTIFICATION']: self._handle_identification,
             MessageProtocol.MESSAGE_TYPES['STATUS_UPDATE']: self._handle_status_update,
             MessageProtocol.MESSAGE_TYPES['EXTERNAL_BOSSES_INFO']: self._handle_external_bosses_info,
@@ -133,10 +137,10 @@ class Node:
         else:
             logging.warning(f"No hay manejador para el tipo de mensaje: {msg_type} de {sender_id}")
             
-    def _handle_heartbeat(self, node_connection, message_dict):
-        """Procesa mensaje de heartbeat"""
-        # ya el NodeConnection maneja el update del heartbeat
-        pass
+    # def _handle_heartbeat(self, node_connection, message_dict):
+    #     """Procesa mensaje de heartbeat"""
+    #     # ya el NodeConnection maneja el update del heartbeat
+    #     pass
         
     def _handle_identification(self, node_connection, message_dict):
         """Procesa mensaje de identificación"""
@@ -327,11 +331,11 @@ class Node:
             )
             
             # Iniciar heartbeats
-            threading.Thread(
-                target=self._heartbeat_loop,
-                args=(conn,),
-                daemon=True
-            ).start()
+            # threading.Thread(
+            #     target=self._heartbeat_loop,
+            #     args=(conn,),
+            #     daemon=True
+            # ).start()
             
             # Replicar info a subordinados
             self.replicate_external_bosses_info()
@@ -443,7 +447,7 @@ class Node:
                         
                         if success:
                             # Notificar a la subclase que se heredó un nuevo subordinado de un conflicto
-                            self._on_subordinate_inherited_from_conflict(client_ip)
+                            # self._on_subordinate_inherited_from_conflict(client_ip)
                             
                             # Enviarle IDENTIFICATION para que sepa que debe volverse subordinado
                             response = self._create_message(
@@ -491,13 +495,12 @@ class Node:
         # 1. Dejar de ser jefe
         self.i_am_boss = False
         
-        # 2. Detener tareas de jefe si existen
-        if hasattr(self, 'stop_boss_tasks'):
-            try:
-                self.stop_boss_tasks()
-                logging.info("Tareas de jefe detenidas")
-            except Exception as e:
-                logging.error(f"Error deteniendo tareas de jefe: {e}")
+        # 2. Detener tareas de jefe
+        try:
+            self.stop_boss_tasks()
+            logging.info("Tareas de jefe detenidas")
+        except Exception as e:
+            logging.error(f"Error deteniendo tareas de jefe: {e}")
         
         # 3. Convertir subordinados actuales en conexiones a cerrar
         if self.subordinates:
@@ -680,11 +683,11 @@ class Node:
             self.my_boss_profile.set_connection(new_connection)
             
             # Iniciar envío periódico de heartbeats
-            threading.Thread(
-                target=self._heartbeat_loop,
-                args=(new_connection,),
-                daemon=True
-            ).start()
+            # threading.Thread(
+            #     target=self._heartbeat_loop,
+            #     args=(new_connection,),
+            #     daemon=True
+            # ).start()
             
             return True
         else:
@@ -716,11 +719,11 @@ class Node:
         
         return False
     
-    def _heartbeat_loop(self, node_connection):
-        """Envía heartbeats periódicos a una conexión"""
-        while self.running and node_connection.is_connected():
-            node_connection.send_heartbeat()
-            time.sleep(30)  # Heartbeat cada 30 segundos
+    # def _heartbeat_loop(self, node_connection):
+    #     """Envía heartbeats periódicos a una conexión"""
+    #     while self.running and node_connection.is_connected():
+    #         node_connection.send_heartbeat()
+    #         time.sleep(30)  # Heartbeat cada 30 segundos
             
     def add_subordinate(self, node_ip, existing_socket=None):
         """
@@ -769,11 +772,11 @@ class Node:
             )
             
             # Iniciar heartbeats
-            threading.Thread(
-                target=self._heartbeat_loop,
-                args=(conn,),
-                daemon=True
-            ).start()
+            # threading.Thread(
+            #     target=self._heartbeat_loop,
+            #     args=(conn,),
+            #     daemon=True
+            # ).start()
             
             # Enviar info de jefes externos al nuevo subordinado
             if self.external_bosses_cache:
@@ -875,11 +878,11 @@ class Node:
             )
             
             # Iniciar heartbeats
-            threading.Thread(
-                target=self._heartbeat_loop,
-                args=(conn,),
-                daemon=True
-            ).start()
+            # threading.Thread(
+            #     target=self._heartbeat_loop,
+            #     args=(conn,),
+            #     daemon=True
+            # ).start()
             
             # Replicar información de jefes externos a subordinados
             self.replicate_external_bosses_info()
@@ -1008,38 +1011,59 @@ class Node:
                 except:
                     pass
     
-    def _heartbeat_monitor_loop(self):
-        """
-        Hilo que monitorea los heartbeats de todas las conexiones.
-        Si un nodo no ha enviado heartbeat en heartbeat_timeout segundos,
-        se considera muerto y se desconecta.
-        """
-        logging.info(f"Iniciando monitor de heartbeats (timeout: {self.heartbeat_timeout}s, check interval: {self.heartbeat_check_interval}s)")
+    # def _heartbeat_monitor_loop(self):
+    #     """
+    #     Hilo que monitorea los heartbeats de todas las conexiones.
+    #     Si un nodo no ha enviado heartbeat en heartbeat_timeout segundos,
+    #     se considera muerto y se desconecta.
+    #     """
+    #     logging.info(f"Iniciando monitor de heartbeats (timeout: {self.heartbeat_timeout}s, check interval: {self.heartbeat_check_interval}s)")
         
-        while self.running:
-            try:
-                time.sleep(self.heartbeat_check_interval)
+    #     while self.running:
+    #         try:
+    #             time.sleep(self.heartbeat_check_interval)
                 
-                # Limpiar nodos muertos
+    #             # Limpiar nodos muertos
+    #             self._cleanup_dead_nodes()
+                
+    #         except Exception as e:
+    #             logging.error(f"Error en monitor de heartbeats: {e}")
+    
+    def _connection_monitor_loop(self):
+        """
+        Thread que monitorea periódicamente el estado de las conexiones.
+        - Si soy subordinado: verifica que el jefe esté vivo, sino llama a elecciones
+        - Si soy jefe: verifica que los subordinados estén vivos y los elimina si no
+        - Verifica conexiones con otros jefes
+        """
+        logging.info(f"Iniciando monitoreo de conexiones (intervalo: {self.connection_check_interval}s)")
+        
+        while self.running and not self.connection_monitor_stop_event.is_set():
+            try:
+                time.sleep(self.connection_check_interval)
+                
+                # Limpiar nodos muertos (verifica jefe, subordinados y otros jefes)
                 self._cleanup_dead_nodes()
                 
             except Exception as e:
-                logging.error(f"Error en monitor de heartbeats: {e}")
+                logging.error(f"Error en monitor de conexiones: {e}")
+        
+        logging.info("Thread de monitoreo de conexiones finalizado")
     
     def _cleanup_dead_nodes(self):
         """
-        Verifica todas las conexiones y elimina las que han dejado de enviar heartbeats
-        o cuya conexión se ha cerrado.
+        Verifica todas las conexiones y elimina las que se han cerrado.
+        NodeConnection maneja internamente los heartbeats y desconecta automáticamente
+        si no recibe heartbeats, por lo que solo necesitamos verificar is_connected().
         """
         dead_nodes = []
         
         # 1. Verificar jefe (si soy subordinado)
         if not self.i_am_boss and self.my_boss_profile.connection:
-            # Verificar si la conexión está cerrada
             if not self.my_boss_profile.connection.is_connected():
                 boss_ip = self.my_boss_profile.connection.ip
-                logging.warning(f"Jefe {self.my_boss_profile.connection.node_id} desconectado (conexión cerrada)")
-                logging.warning("Iniciando elecciones para encontrar nuevo jefe...")
+                logging.warning(f"⚠️ Jefe {self.my_boss_profile.connection.node_id} desconectado")
+                logging.warning("🗳️ Iniciando elecciones para encontrar nuevo jefe...")
                 
                 # Desconectar del jefe muerto
                 self.my_boss_profile.connection.disconnect()
@@ -1050,43 +1074,12 @@ class Node:
                 
                 # Iniciar proceso de elección
                 threading.Thread(target=self.call_elections, daemon=True).start()
-            else:
-                # La conexión está activa, verificar heartbeat
-                time_since_heartbeat = self.my_boss_profile.connection.get_time_since_last_heartbeat()
-                
-                if time_since_heartbeat is not None and time_since_heartbeat > self.heartbeat_timeout:
-                    boss_ip = self.my_boss_profile.connection.ip
-                    logging.warning(f"Jefe {self.my_boss_profile.connection.node_id} no responde (último heartbeat hace {time_since_heartbeat:.1f}s)")
-                    logging.warning("Iniciando elecciones para encontrar nuevo jefe...")
-                    
-                    # Desconectar del jefe muerto
-                    self.my_boss_profile.connection.disconnect()
-                    self.my_boss_profile.clear_connection()
-                    
-                    # Eliminar de known_nodes
-                    self.remove_node_from_registry(self.node_type, boss_ip)
-                    
-                    # Iniciar proceso de elección
-                    threading.Thread(target=self.call_elections, daemon=True).start()
         
         # 2. Verificar subordinados (si soy jefe)
         if self.i_am_boss and self.subordinates:
             for node_id, conn in list(self.subordinates.items()):
-                # Primero verificar si la conexión está cerrada
                 if not conn.is_connected():
-                    logging.warning(f"Subordinado {node_id} desconectado (conexión cerrada)")
-                    dead_nodes.append(node_id)
-                    continue
-                
-                # La conexión está activa, verificar heartbeat
-                time_since_heartbeat = conn.get_time_since_last_heartbeat()
-                
-                # Si nunca ha enviado heartbeat, darle más tiempo (puede estar iniciándose)
-                if time_since_heartbeat is None:
-                    continue
-                
-                if time_since_heartbeat > self.heartbeat_timeout:
-                    logging.warning(f"Subordinado {node_id} no responde (último heartbeat hace {time_since_heartbeat:.1f}s)")
+                    logging.warning(f"Subordinado {node_id} desconectado")
                     dead_nodes.append(node_id)
             
             # Eliminar subordinados muertos
@@ -1112,27 +1105,14 @@ class Node:
         # 3. Verificar conexiones con otros jefes
         for node_type, conn in list(self.bosses_connections.items()):
             if conn:
-                # Verificar si la conexión está cerrada
                 if not conn.is_connected():
                     boss_ip = conn.ip
-                    logging.warning(f"Jefe {node_type} desconectado (conexión cerrada)")
+                    logging.warning(f"Jefe {node_type} desconectado")
                     conn.disconnect()
                     self.bosses_connections[node_type] = None
                     # Eliminar de known_nodes
                     self.remove_node_from_registry(node_type, boss_ip)
                     logging.info(f"Conexión con jefe de {node_type} cerrada")
-                else:
-                    # La conexión está activa, verificar heartbeat
-                    time_since_heartbeat = conn.get_time_since_last_heartbeat()
-                    
-                    if time_since_heartbeat is not None and time_since_heartbeat > self.heartbeat_timeout:
-                        boss_ip = conn.ip
-                        logging.warning(f"Jefe {node_type} no responde (último heartbeat hace {time_since_heartbeat:.1f}s)")
-                        conn.disconnect()
-                        self.bosses_connections[node_type] = None
-                        # Eliminar de known_nodes
-                        self.remove_node_from_registry(node_type, boss_ip)
-                        logging.info(f"Conexión con jefe de {node_type} cerrada")
                         
     def reassign_tasks_from_subordinate(self, node_id):
         """
@@ -1149,17 +1129,17 @@ class Node:
         logging.debug(f"reassign_tasks_from_subordinate no implementado para {self.node_type}")
         return 0
     
-    def _on_subordinate_inherited_from_conflict(self, subordinate_node_id):
-        """
-        Hook que se llama cuando se hereda un subordinado después de un conflicto entre jefes.
-        Las subclases pueden sobrescribir para realizar acciones específicas.
+    # def _on_subordinate_inherited_from_conflict(self, subordinate_node_id):
+    #     """
+    #     Hook que se llama cuando se hereda un subordinado después de un conflicto entre jefes.
+    #     Las subclases pueden sobrescribir para realizar acciones específicas.
         
-        Args:
-            subordinate_node_id (str): ID del subordinado heredado
-        """
-        logging.debug(f"Subordinado heredado en conflicto: {subordinate_node_id}")
-        # Implementación base: no hace nada
-        pass
+    #     Args:
+    #         subordinate_node_id (str): ID del subordinado heredado
+    #     """
+    #     logging.debug(f"Subordinado heredado en conflicto: {subordinate_node_id}")
+    #     # Implementación base: no hace nada
+    #     pass
         
     def send_to_boss(self, message_dict):
         """Enviar mensaje a mi jefe"""
@@ -1332,6 +1312,11 @@ class Node:
             message = json.loads(message_bytes.decode())
             msg_type = message.get('type')
             
+            # Ignorar heartbeats en conexiones temporales (se manejan en NodeConnection)
+            if msg_type == MessageProtocol.MESSAGE_TYPES['HEARTBEAT']:
+                logging.debug(f"Heartbeat recibido de {client_ip} en conexión temporal (ignorado)")
+                return  # No cerrar el socket, simplemente retornar
+            
             # handler para procesar mensaje
             handler = self.temporary_message_handler.get(msg_type)
             if handler:
@@ -1433,6 +1418,21 @@ class Node:
             # Aquí irían las tareas específicas del jefe
             # Ejemplo: iniciar asignación de tareas, monitoreo, etc.
             pass
+    
+    def stop_boss_tasks(self):
+        """
+        Detiene tareas específicas del jefe cuando se cede el rol.
+        Las clases hijas deben sobrescribir este método para detener sus tareas específicas.
+        
+        Ejemplo de uso en subclases:
+        - Router: Detener threads de distribución de tareas
+        - Scrapper: Detener asignación de tareas de scraping
+        - BD: Detener consolidación y balanceo de réplicas
+        """
+        logging.info("Deteniendo tareas de jefe (implementación base - sin tareas)")
+        # Implementación base: no hace nada
+        # Las subclases deben sobrescribir este método
+        pass
         
     def call_elections(self):
         """
@@ -1614,13 +1614,13 @@ class Node:
         self.start_listening()
         
         # 3. Iniciar monitor de heartbeats
-        logging.info("Iniciando monitor de heartbeats...")
-        self.heartbeat_monitor_thread = threading.Thread(
-            target=self._heartbeat_monitor_loop,
-            name="HeartbeatMonitor",
-            daemon=True
-        )
-        self.heartbeat_monitor_thread.start()
+        # logging.info("Iniciando monitor de heartbeats...")
+        # self.heartbeat_monitor_thread = threading.Thread(
+        #     target=self._heartbeat_monitor_loop,
+        #     name="HeartbeatMonitor",
+        #     daemon=True
+        # )
+        # self.heartbeat_monitor_thread.start()
         
         # 4. Broadcast de identificación (todos me registran, solo jefe responde)
         if discovered_ips:
@@ -1641,6 +1641,16 @@ class Node:
             # self.connect_to_discovered_nodes("bd")
         else:
             logging.info(f"✓ Soy subordinado {self.node_type}, conectado al jefe en {self.boss_connection.ip if self.boss_connection else 'desconocido'}")
+        
+        # Iniciar thread de monitoreo de conexiones
+        self.connection_monitor_stop_event.clear()
+        self.connection_monitor_thread = threading.Thread(
+            target=self._connection_monitor_loop,
+            daemon=True,
+            name=f"ConnectionMonitor-{self.node_id}"
+        )
+        self.connection_monitor_thread.start()
+        logging.info("Thread de monitoreo de conexiones iniciado")
         
         logging.info("Nodo iniciado correctamente.")
         
