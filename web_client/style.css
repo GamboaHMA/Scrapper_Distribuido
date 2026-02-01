@@ -485,6 +485,34 @@ button:disabled {
     transform: translateY(-2px);
 }
 
+.btn-secondary:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+    transform: none;
+}
+
+/* Loading indicator for tables */
+#tables-loading {
+    text-align: center;
+    padding: 40px 20px;
+    color: var(--text-secondary);
+}
+
+#tables-loading .spinner {
+    border: 4px solid rgba(99, 102, 241, 0.1);
+    border-top: 4px solid var(--primary-color);
+    border-radius: 50%;
+    width: 50px;
+    height: 50px;
+    animation: spin 1s linear infinite;
+    margin: 0 auto 20px;
+}
+
+#tables-loading p {
+    font-size: 1rem;
+    margin: 0;
+}
+
 .tables-list {
     margin-top: 20px;
 }
@@ -603,6 +631,15 @@ button:disabled {
 
 .table-data-container {
     overflow-x: auto;
+}
+
+.table-data-container .spinner {
+    border: 4px solid rgba(99, 102, 241, 0.1);
+    border-top: 4px solid var(--primary-color);
+    border-radius: 50%;
+    width: 50px;
+    height: 50px;
+    animation: spin 1s linear infinite;
 }
 
 .table-info {

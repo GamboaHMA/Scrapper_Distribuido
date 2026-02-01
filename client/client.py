@@ -41,6 +41,8 @@ class InteractiveClient:
         self.router_ip = None
         self.running = True
         
+        self.router_ips = []
+        
         # Conexión persistente con el router usando NodeConnection
         self.router_connection = None
         
@@ -84,6 +86,7 @@ class InteractiveClient:
             
             # Extraer IPs únicas
             router_ips = list(set([info[4][0] for info in addr_info]))
+            self.router_ips = router_ips
             
             self.log(f"✓ {len(router_ips)} router(s) encontrado(s): {router_ips}", "SUCCESS")
             
@@ -242,18 +245,27 @@ class InteractiveClient:
 
     
     def _send_heartbeats(self):
-        """Thread que envía heartbeats periódicos al Router"""
-        self.log("💓 Iniciando envío de heartbeats...")
+        """Thread que envía heartbeats periódicos al Router y monitorea la conexión"""
+        self.log("💓 Iniciando envío de heartbeats y monitoreo de conexión...")
         
-        while self.running and self.router_connection and self.router_connection.connected:
+        while self.running:
             try:
-                time.sleep(5)  # Heartbeat cada 5 segundos
+                time.sleep(5)  # Heartbeat/chequeo cada 5 segundos
                 
+                # Verificar si estamos conectados
                 if not self.router_connection or not self.router_connection.connected:
                     self.log("⚠️ Desconexión detectada del Router", "WARNING")
-                    break
+                    self.log("🔄 Intentando reconectar al Router (nuevo jefe si cambió)...", "WARNING")
+                    
+                    # Intentar reconectar (múltiples intentos)
+                    if self._reconnect_to_router():
+                        self.log("✅ Reconexión exitosa, continuando monitoreo...", "SUCCESS")
+                        continue
+                    else:
+                        self.log("❌ Reconexión fallida, reintentando en 5s...", "WARNING")
+                        continue
                 
-                # Crear mensaje de heartbeat
+                # Si estamos conectados, enviar heartbeat
                 heartbeat_msg = {
                     'type': MessageProtocol.MESSAGE_TYPES['HEARTBEAT'],
                     'sender_id': self.client_id,
@@ -266,20 +278,15 @@ class InteractiveClient:
                 
             except Exception as e:
                 if self.running:
-                    self.log(f"⚠️ Error enviando heartbeat (Router caído): {e}", "WARNING")
-                break
+                    self.log(f"⚠️ Error en heartbeat/monitoreo: {e}", "WARNING")
+                    # En el próximo ciclo intentará reconectar
         
         self.log("💓 Envío de heartbeats finalizado", "INFO")
-        
-        # Si aún estamos corriendo, intentar reconectar
-        if self.running:
-            self.log("🔄 Intentando reconectar al Router...", "WARNING")
-            self._reconnect_to_router()
     
     def _reconnect_to_router(self):
-        """Intenta reconectar al Router usando DNS de Docker"""
-        retry_interval = 5  # Segundos entre intentos
-        max_retries = 10
+        """Intenta reconectar al Router (potencialmente un nuevo jefe) usando DNS de Docker"""
+        retry_interval = 3  # Segundos entre intentos
+        max_retries = 3  # Menos intentos por ciclo, el monitoreo continuará intentando
         
         for attempt in range(1, max_retries + 1):
             if not self.running:
@@ -295,26 +302,21 @@ class InteractiveClient:
                     pass
                 self.router_connection = None
             
-            # Resetear IP para forzar nueva búsqueda DNS
+            # Resetear IP para forzar nueva búsqueda DNS (puede haber nuevo jefe)
             self.router_ip = None
             
-            # Intentar conectar
+            # Intentar conectar (esto hará re-descubrimiento DNS y búsqueda del nuevo jefe)
             if self.connect():
-                self.log("✅ Reconexión exitosa al Router", "SUCCESS")
+                self.log("✅ Reconexión exitosa al Router (nuevo jefe si cambió)", "SUCCESS")
                 return True
             
             # Esperar antes del próximo intento
-            if attempt < max_retries:
+            if attempt < max_retries and self.running:
                 self.log(f"⏳ Esperando {retry_interval}s antes del próximo intento...", "INFO")
                 time.sleep(retry_interval)
         
-        self.log("❌ No se pudo reconectar al Router después de múltiples intentos", "ERROR")
+        self.log("⚠️ No se pudo reconectar en este ciclo, el monitoreo continuará intentando...", "WARNING")
         return False
-        
-        # Si aún estamos corriendo, intentar reconectar
-        if self.running:
-            self.log("🔄 Intentando reconectar al Router...", "WARNING")
-            self._reconnect_to_router()
     
     def _handle_message(self, node_connection, message):
         """Maneja mensajes recibidos del Router"""
