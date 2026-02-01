@@ -84,7 +84,53 @@ class NodeConnection:
             
             try:
                 if existing_socket:
-                    self.socket = existing_socket
+                    # Si nos pasa un socket ya conectado (por ejemplo, aceptado por el
+                    # listener), puede ser un socket plano o ya envuelto en SSL.
+                    # Si este NodeConnection requiere TLS pero el socket no es
+                    # un ssl.SSLSocket, envolverlo aquí como cliente para completar
+                    # el handshake y homogeneizar el tratamiento de la conexión.
+                    if self.use_tls and not isinstance(existing_socket, ssl.SSLSocket):
+                        raw = existing_socket
+                        # Crear contexto cliente similar al usado cuando creamos el socket
+                        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+                        if self.tls_cafile:
+                            try:
+                                ctx.load_verify_locations(self.tls_cafile)
+                                ctx.verify_mode = ssl.CERT_REQUIRED
+                            except Exception as e:
+                                logging.warning(f"No se pudo cargar cafile {self.tls_cafile}: {e}. Continuando sin verificación.")
+                                ctx.check_hostname = False
+                                ctx.verify_mode = ssl.CERT_NONE
+                        else:
+                            logging.warning("USE_TLS habilitado en NodeConnection pero no se proporcionó tls_cafile: no se verificará el certificado del servidor.")
+                            ctx.check_hostname = False
+                            ctx.verify_mode = ssl.CERT_NONE
+
+                        ctx.check_hostname = False
+
+                        try:
+                            if self.tls_certfile and self.tls_keyfile:
+                                try:
+                                    ctx.load_cert_chain(certfile=self.tls_certfile, keyfile=self.tls_keyfile)
+                                    logging.debug("Certificado cliente cargado en contexto TLS (existing_socket)")
+                                except Exception as e:
+                                    logging.warning(f"No se pudo cargar cert/key cliente: {e}")
+
+                            # Envolver el socket existente como cliente y hacer handshake
+                            ss = ctx.wrap_socket(raw, server_hostname=None, do_handshake_on_connect=False)
+                            ss.settimeout(5)
+                            ss.do_handshake()
+                            self.socket = ss
+                        except Exception as e:
+                            try:
+                                raw.close()
+                            except:
+                                pass
+                            logging.error(f"Error envolviendo socket existente en TLS: {e}")
+                            self.connected = False
+                            return False
+                    else:
+                        self.socket = existing_socket
                 else:
                     raw_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                     raw_sock.settimeout(5)

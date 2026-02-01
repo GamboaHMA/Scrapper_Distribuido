@@ -1302,34 +1302,62 @@ class Node:
 
                 # Si configuramos SSL para el servidor, envolver el socket y hacer handshake
                 if self.use_tls and self.ssl_server_context:
+                    # Intentar inspeccionar el primer byte para distinguir entre
+                    # una conexión TLS (ClientHello empieza con 0x16) y una
+                    # conexión plain (ej. JSON empezando con '{' = 0x7b).
                     try:
-                        ssl_sock = self.ssl_server_context.wrap_socket(client_sock, server_side=True, do_handshake_on_connect=False)
-                        # Hacer handshake explícito para capturar errores (p. ej. unknown ca)
-                        ssl_sock.settimeout(5.0)
-                        ssl_sock.do_handshake()
-                        logging.debug(f"Handshake TLS exitoso con {client_ip}")
-                        wrapped = ssl_sock
-                    except ssl.SSLError as e:
-                        logging.error(f"Error aceptando conexión TLS desde {client_ip}: {e}")
+                        client_sock.settimeout(0.5)
                         try:
-                            client_sock.close()
-                        except:
-                            pass
-                        continue
-                    except Exception as e:
-                        logging.error(f"Error durante handshake TLS con {client_ip}: {e}")
-                        try:
-                            client_sock.close()
-                        except:
-                            pass
-                        continue
+                            first = client_sock.recv(1, socket.MSG_PEEK)
+                        except (BlockingIOError, InterruptedError):
+                            first = b''
+                        except Exception as e:
+                            # Si falló el peek, seguir con el flujo normal e intentar handshake
+                            first = b''
 
-                    # Procesar en hilo separado con socket TLS
-                    threading.Thread(
-                        target=self._handle_incoming_connection,
-                        args=(wrapped, client_addr),
-                        daemon=True
-                    ).start()
+                        # byte 0x16 indica TLS Handshake (ClientHello)
+                        if first and first[0] == 0x16:
+                            try:
+                                ssl_sock = self.ssl_server_context.wrap_socket(client_sock, server_side=True, do_handshake_on_connect=False)
+                                ssl_sock.settimeout(5.0)
+                                ssl_sock.do_handshake()
+                                logging.debug(f"Handshake TLS exitoso con {client_ip}")
+                                wrapped = ssl_sock
+                            except ssl.SSLError as e:
+                                logging.error(f"Error aceptando conexión TLS desde {client_ip}: {e}")
+                                try:
+                                    client_sock.close()
+                                except:
+                                    pass
+                                continue
+                            except Exception as e:
+                                logging.error(f"Error durante handshake TLS con {client_ip}: {e}")
+                                try:
+                                    client_sock.close()
+                                except:
+                                    pass
+                                continue
+
+                            # Procesar en hilo separado con socket TLS
+                            threading.Thread(
+                                target=self._handle_incoming_connection,
+                                args=(wrapped, client_addr),
+                                daemon=True
+                            ).start()
+                        else:
+                            # No parece TLS: procesar como conexión plain
+                            logging.debug(f"Primera byte de conexión desde {client_ip}: {first.hex() if first else 'empty'} (tratando como plain)")
+                            threading.Thread(
+                                target=self._handle_incoming_connection,
+                                args=(client_sock, client_addr),
+                                daemon=True
+                            ).start()
+                    finally:
+                        # Restaurar timeout del socket de escucha si fue cambiado
+                        try:
+                            client_sock.settimeout(None)
+                        except:
+                            pass
                 else:
                     # No TLS: procesar directamente
                     threading.Thread(
