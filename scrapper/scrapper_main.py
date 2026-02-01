@@ -796,11 +796,11 @@ class ScrapperNode(Node):
             boss_profile.set_connection(new_connection)
             
             # Iniciar heartbeats
-            threading.Thread(
-                target=self._heartbeat_loop,
-                args=(new_connection,),
-                daemon=True
-            ).start()
+            # threading.Thread(
+            #     target=self._heartbeat_loop,
+            #     args=(new_connection,),
+            #     daemon=True
+            # ).start()
         else:
             logging.error(f"No se pudo conectar con jefe {node_type} en {boss_ip}")
             boss_profile.clear_connection()

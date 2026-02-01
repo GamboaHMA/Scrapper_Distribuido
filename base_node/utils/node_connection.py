@@ -3,6 +3,7 @@ import json
 import threading
 import queue
 import logging
+import time
 from datetime import datetime
 from .message_protocol import MessageProtocol
 
@@ -51,11 +52,16 @@ class NodeConnection:
         self.receive_stop_event = threading.Event()
         self.on_message_callback = on_message_callback
         
+        self.heartbeat_monitor_stop_event = threading.Event()
+        self.heartbeat_thread_stop_event = threading.Event()
+        
         # Estado del nodo
-        self.last_heartbeat = None
+        self.last_heartbeat = datetime.now()  # Inicializar con tiempo actual para dar gracia inicial
         self.is_busy = False
         self.estado = "desconectado"  # "desconectado", "conectado", "ocupado"
         self.metadata = {}  # Diccionario para datos adicionales
+        
+        self.heartbeat_timeout = 60  # Segundos para timeout de heartbeat
         
         logging.debug(f"NodeConnection creada para {self.node_id}")
     
@@ -89,6 +95,8 @@ class NodeConnection:
                 # Iniciar hilos de envío y recepción
                 self._start_send_thread()
                 self._start_receive_thread()
+                self._start_heartbeat_monitor()
+                self._start_heartbeat_thread()
                 
                 logging.debug(f"Conectado exitosamente a {self.node_id}")
                 return True
@@ -122,6 +130,40 @@ class NodeConnection:
         )
         self.receive_thread.start()
     
+    def _start_heartbeat_monitor(self):
+        """Inicia un hilo para monitorear heartbeats"""
+        def heartbeat_monitor():
+            while self.connected and not self.heartbeat_monitor_stop_event.is_set():
+                time_since_last = self.get_time_since_last_heartbeat()
+                # Solo verificar timeout si ya ha pasado suficiente tiempo desde la conexión
+                if time_since_last is not None and time_since_last > self.heartbeat_timeout:
+                    logging.warning(f"No se recibió heartbeat de {self.node_id} en {time_since_last:.1f}s (timeout: {self.heartbeat_timeout}s). Desconectando.")
+                    self.disconnect()
+                    break
+                time.sleep(10)  # Esperar 10 segundos antes de chequear de nuevo
+        
+        threading.Thread(
+            target=heartbeat_monitor,
+            name=f"HeartbeatMonitor-{self.node_id}",
+            daemon=True
+        ).start()
+    
+    def _start_heartbeat_thread(self):
+        """Inicia un hilo para enviar heartbeats periódicamente"""
+        def heartbeat_sender():
+            # Esperar antes del primer heartbeat para dar tiempo a establecer la conexión
+            time.sleep(15)
+            
+            while self.connected and not self.heartbeat_thread_stop_event.is_set():
+                self.send_heartbeat()
+                time.sleep(15)  # Enviar heartbeat cada 15 segundos
+        
+        threading.Thread(
+            target=heartbeat_sender,
+            name=f"HeartbeatSender-{self.node_id}",
+            daemon=True
+        ).start()
+        
     def _send_worker(self):
         """Hilo que envía mensajes desde la cola de envío"""
         while self.connected and not self.send_stop_event.is_set():
@@ -197,11 +239,14 @@ class NodeConnection:
                 
                 # Actualizar último heartbeat si es un heartbeat
                 msg_type = message_dict.get('type')
-                if msg_type == 'heartbeat':
-                    self.last_heartbeat = datetime.now()
+                if msg_type == MessageProtocol.MESSAGE_TYPES['HEARTBEAT']:
+                    self.update_heartbeat()
                     logging.debug(f"Heartbeat recibido de {self.node_id}")
-                else:
-                    logging.info(f"Mensaje recibido de {self.node_id}: {msg_type}")
+                    # NO llamar callback para heartbeats, se manejan internamente
+                    continue  # Saltar el callback y continuar con el siguiente mensaje
+                
+                # Para cualquier otro mensaje, loguear y procesar normalmente
+                logging.info(f"Mensaje recibido de {self.node_id}: {msg_type}")
                 
                 # Llamar callback si está definido
                 if self.on_message_callback:
@@ -290,7 +335,7 @@ class NodeConnection:
         message_dict = MessageProtocol.parse_message(message_json)
         
         self.send_message(message_dict)
-        self.last_heartbeat = datetime.now()
+        # self.update_heartbeat()
         logging.debug(f"Heartbeat enviado a {self.node_id}")
     
     def disconnect(self):
@@ -304,6 +349,8 @@ class NodeConnection:
             # Detener hilos
             self.send_stop_event.set()
             self.receive_stop_event.set()
+            self.heartbeat_monitor_stop_event.set()
+            self.heartbeat_thread_stop_event.set()
             
             # Señal de parada para hilo de envío
             try:

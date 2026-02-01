@@ -226,11 +226,11 @@ class RouterNode(Node):
             node_connection.send_message(response)
             
             # Iniciar heartbeat monitoring para el cliente
-            threading.Thread(
-                target=self._heartbeat_loop,
-                args=(node_connection,),
-                daemon=True
-            ).start()
+            # threading.Thread(
+            #     target=self._heartbeat_loop,
+            #     args=(node_connection,),
+            #     daemon=True
+            # ).start()
             
             return  # No continuar con el procesamiento normal
         
@@ -280,11 +280,11 @@ class RouterNode(Node):
             node_connection.send_message(response)
             
             # Iniciar heartbeats
-            threading.Thread(
-                target=self._heartbeat_loop,
-                args=(node_connection,),
-                daemon=True
-            ).start()
+            # threading.Thread(
+            #     target=self._heartbeat_loop,
+            #     args=(node_connection,),
+            #     daemon=True
+            # ).start()
             
             return  # No continuar con el procesamiento normal
         
@@ -800,11 +800,11 @@ class RouterNode(Node):
                 logging.info(f"✓ Conexión con jefe {node_type} establecida exitosamente")
                 
                 # Iniciar heartbeats
-                threading.Thread(
-                    target=self._heartbeat_loop,
-                    args=(new_connection,),
-                    daemon=True
-                ).start()
+                # threading.Thread(
+                #     target=self._heartbeat_loop,
+                #     args=(new_connection,),
+                #     daemon=True
+                # ).start()
             except Exception as e:
                 logging.error(f"Error al configurar conexión con jefe {node_type}: {e}")
                 import traceback

@@ -113,7 +113,7 @@ run-scrapper: network ## Ejecutar 1 ScrapperNode
 	docker run -d --name scrapper-node-$$NEXT_NUM \
 		--network $(NETWORK_NAME) \
 		--network-alias scrapper \
-		-e LOG_LEVEL=INFO \
+		-e LOG_LEVEL=DEBUG \
 		$(SCRAPPER_NODE_IMAGE); \
 	echo "$(GREEN)✅ ScrapperNode $$NEXT_NUM iniciado$(NC)"
 
@@ -123,7 +123,7 @@ run-scrappers: network ## Ejecutar 2 ScrapperNodes (por defecto)
 		docker run -d --name scrapper-node-$$i \
 			--network $(NETWORK_NAME) \
 			--network-alias scrapper \
-			-e LOG_LEVEL=INFO \
+			-e LOG_LEVEL=DEBUG \
 			$(SCRAPPER_NODE_IMAGE); \
 		echo "$(GREEN)✅ ScrapperNode $$i iniciado$(NC)"; \
 	done
@@ -136,7 +136,7 @@ run-router: network ## Ejecutar 1 RouterNode
 	docker run -d --name router-node-$$NEXT_NUM \
 		--network $(NETWORK_NAME) \
 		--network-alias router \
-		-e LOG_LEVEL=INFO \
+		-e LOG_LEVEL=DEBUG \
 		$(ROUTER_NODE_IMAGE); \
 	echo "$(GREEN)✅ RouterNode $$NEXT_NUM iniciado$(NC)"
 
@@ -146,7 +146,7 @@ run-routers: network ## Ejecutar 2 RouterNodes (por defecto)
 		docker run -d --name router-node-$$i \
 			--network $(NETWORK_NAME) \
 			--network-alias router \
-			-e LOG_LEVEL=INFO \
+			-e LOG_LEVEL=DEBUG \
 			$(ROUTER_NODE_IMAGE); \
 		echo "$(GREEN)✅ RouterNode $$i iniciado$(NC)"; \
 	done
@@ -159,7 +159,7 @@ run-database: network ## Ejecutar 1 DatabaseNode
 	docker run -d --name db-node-$$NEXT_NUM \
 		--network $(NETWORK_NAME) \
 		--network-alias bd \
-		-e LOG_LEVEL=INFO \
+		-e LOG_LEVEL=DEBUG \
 		-v database-data-$$NEXT_NUM:/app/database \
 		$(DATABASE_NODE_IMAGE); \
 	echo "$(GREEN)✅ DatabaseNode $$NEXT_NUM iniciado$(NC)"
@@ -170,7 +170,7 @@ run-databases: network ## Ejecutar 2 DatabaseNodes (por defecto)
 		docker run -d --name db-node-$$i \
 			--network $(NETWORK_NAME) \
 			--network-alias bd \
-			-e LOG_LEVEL=INFO \
+			-e LOG_LEVEL=DEBUG \
 			-v database-data-$$i:/app/database \
 			$(DATABASE_NODE_IMAGE); \
 		echo "$(GREEN)✅ DatabaseNode $$i iniciado$(NC)"; \
@@ -181,6 +181,7 @@ run-client: network ## Ejecutar 1 Cliente interactivo
 	docker run -d --name client-1 \
 		--network $(NETWORK_NAME) \
 		--entrypoint /bin/bash \
+		-e LOG_LEVEL=DEBUG \
 		$(CLIENT_IMAGE) -c "tail -f /dev/null"
 	@echo "$(GREEN)✅ Cliente iniciado$(NC)"
 	@echo "$(YELLOW)Para usar el cliente ejecuta:$(NC)"
@@ -193,6 +194,7 @@ run-streamlit: network ## Ejecutar interfaz Streamlit (accesible en http://local
 		-p 8501:8501 \
 		-e ROUTER_IP=router-node \
 		-e ROUTER_PORT=7070 \
+		-e LOG_LEVEL=DEBUG \
 		streamlit-app
 	@echo "$(GREEN)✅ Streamlit UI iniciado$(NC)"
 	@echo "$(YELLOW)Accede a la interfaz en:$(NC) http://localhost:8501"
@@ -205,6 +207,7 @@ run-web-client: network ## Ejecutar Cliente Web (accesible en http://localhost:8
 		-e ROUTER_HOST=router \
 		-e ROUTER_PORT=7070 \
 		-e WEB_PORT=8080 \
+		-e LOG_LEVEL=DEBUG \
 		$(WEB_CLIENT_IMAGE)
 	@echo "$(GREEN)✅ Cliente Web iniciado$(NC)"
 	@echo "$(YELLOW)Accede a la interfaz en:$(NC) http://localhost:8080"
