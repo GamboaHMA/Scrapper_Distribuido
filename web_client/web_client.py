@@ -46,6 +46,8 @@ class WebScrapperClient:
         self.router_ip = None
         self.running = True
         
+        self.router_ips = []
+        
         # Conexión persistente con el router
         self.router_connection = None
         self.connection_lock = threading.Lock()
@@ -77,6 +79,7 @@ class WebScrapperClient:
             
             router_ips = list(set([info[4][0] for info in addr_info]))
             logging.info(f"{len(router_ips)} router(s) encontrado(s): {router_ips}")
+            self.router_ips = router_ips
             
             # Buscar el jefe
             boss_ip = self._find_boss_router(router_ips)
@@ -198,20 +201,115 @@ class WebScrapperClient:
     
     def _monitor_connection(self):
         """Monitorea la conexión y reconecta si es necesario"""
+        logging.info("👀 Thread de monitoreo de conexión iniciado")
+        
         while self.running:
-            time.sleep(10)  # Chequear cada 10 segundos
+            time.sleep(5)  # Chequear cada 5 segundos (más frecuente)
             
-            with self.connection_lock:
-                if not self.router_connection or not self.router_connection.is_connected():
-                    logging.warning("Conexión con router perdida, intentando reconectar...")
-                    self.router_ip = None  # Forzar re-descubrimiento
-                    self.router_connection = None
+            # Verificar estado de conexión SIN bloquear (lectura rápida)
+            is_connected = False
+            if self.router_connection:
+                try:
+                    is_connected = self.router_connection.is_connected()
+                except:
+                    is_connected = False
+            
+            if not is_connected:
+                logging.warning("⚠️ Conexión con router perdida, intentando reconectar...")
+                # Intentar reconectar (esto adquiere el lock internamente)
+                success = self._attempt_reconnection()
+                if success:
+                    logging.info("✅ Reconexión exitosa, continuando monitoreo...")
+                else:
+                    logging.error("❌ Reconexión fallida, reintentando en 5s...")
+        
+        logging.info("👀 Thread de monitoreo de conexión finalizado")
+    
+    def _attempt_reconnection(self):
+        """
+        Intenta reconectar al router (potencialmente un nuevo jefe).
+        Adquiere el lock internamente.
+        """
+        max_retries = 3  # Menos intentos por ciclo, pero el monitoreo seguirá intentando
+        retry_interval = 3  # segundos
+        
+        with self.connection_lock:
+            # Cerrar conexión anterior si existe
+            if self.router_connection:
+                try:
+                    self.router_connection.disconnect()
+                except:
+                    pass
+                self.router_connection = None
+            
+            # Resetear IP para forzar nuevo descubrimiento DNS
+            self.router_ip = None
+        
+        for attempt in range(1, max_retries + 1):
+            if not self.running:
+                break
+            
+            logging.info(f"🔄 Intento de reconexión {attempt}/{max_retries}...")
+            
+            # Intentar resolver y conectar al nuevo jefe (sin lock para evitar deadlock)
+            if not self.resolve_router():
+                logging.error(f"No se pudo resolver router en intento {attempt}")
+                if attempt < max_retries and self.running:
+                    logging.info(f"⏳ Esperando {retry_interval}s antes del próximo intento...")
+                    time.sleep(retry_interval)
+                continue
+            
+            try:
+                with self.connection_lock:
+                    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    sock.settimeout(5)  # Timeout para evitar bloqueos largos
+                    sock.connect((self.router_ip, self.router_port))
                     
-                    # Intentar reconectar
-                    if self.connect():
-                        logging.info("Reconexión exitosa")
-                    else:
-                        logging.error("Fallo la reconexión, reintentando...")
+                    self.router_connection = NodeConnection(
+                        node_type='router',
+                        ip=self.router_ip,
+                        port=self.router_port,
+                        on_message_callback=self._handle_message,
+                        sender_node_type='client',
+                        sender_id=self.client_id
+                    )
+                    
+                    self.router_connection.connect(existing_socket=sock)
+                    
+                    # Enviar identificación
+                    self.router_connection.send_message({
+                        'type': MessageProtocol.MESSAGE_TYPES['IDENTIFICATION'],
+                        'sender_id': self.client_id,
+                        'node_type': 'client',
+                        'timestamp': datetime.now().isoformat(),
+                        'data': {
+                            'client_type': 'web',
+                            'is_temporary': False,
+                            'is_boss': False,
+                            'port': 0
+                        }
+                    })
+                    
+                    logging.info(f"✅ Reconexión exitosa al Router jefe: {self.router_ip}")
+                    return True
+                    
+            except Exception as e:
+                logging.error(f"❌ Error en intento {attempt}: {e}")
+                with self.connection_lock:
+                    if self.router_connection:
+                        try:
+                            self.router_connection.disconnect()
+                        except:
+                            pass
+                        self.router_connection = None
+            
+            # Esperar antes del próximo intento (excepto en el último)
+            if attempt < max_retries and self.running:
+                logging.info(f"⏳ Esperando {retry_interval}s antes del próximo intento...")
+                time.sleep(retry_interval)
+        
+        logging.warning("⚠️ No se pudo reconectar en este ciclo, el monitoreo continuará intentando...")
+        return False
     
     def _handle_message(self, connection, message):
         """Callback para mensajes del router"""
@@ -253,16 +351,29 @@ class WebScrapperClient:
         
         elif msg_type == MessageProtocol.MESSAGE_TYPES['GET_TABLE_DATA_RESPONSE']:
             data = message.get('data', {})
+            request_id = data.get('request_id', '')
             table_name = data.get('table_name', 'unknown')
-            request_key = f"table_{table_name}"
             
             with self.requests_lock:
-                if request_key in self.pending_db_requests:
-                    self.completed_db_responses[request_key] = data
-                    del self.pending_db_requests[request_key]
-                    logging.info(f"✓ Datos de tabla '{table_name}' recibidos")
+                # Buscar por request_id si está disponible
+                if request_id and request_id in self.pending_db_requests:
+                    self.completed_db_responses[request_id] = data
+                    del self.pending_db_requests[request_id]
+                    logging.info(f"✓ Datos de tabla '{table_name}' recibidos (request_id={request_id})")
                 else:
-                    logging.warning(f"Respuesta de tabla '{table_name}' recibida sin petición pendiente")
+                    # Fallback: buscar por table_name (compatibilidad)
+                    found = False
+                    for req_id, req_info in list(self.pending_db_requests.items()):
+                        if req_info.get('table_name') == table_name and req_info.get('type') == 'data':
+                            self.completed_db_responses[req_id] = data
+                            del self.pending_db_requests[req_id]
+                            logging.info(f"✓ Datos de tabla '{table_name}' recibidos (fallback match: {req_id})")
+                            found = True
+                            break
+                    
+                    if not found:
+                        logging.warning(f"Respuesta de tabla '{table_name}' recibida sin petición pendiente")
+
     
     def request_scraping(self, url):
         """Envía petición de scrapping"""
@@ -356,13 +467,16 @@ class WebScrapperClient:
             if not self.connect():
                 return None, "No hay conexión con el router"
         
-        request_key = f"table_{table_name}"
+        # Usar ID único para cada petición para evitar usar caché
+        import uuid
+        request_id = f"table_{table_name}_{uuid.uuid4().hex[:8]}"
         
         message = {
             'type': MessageProtocol.MESSAGE_TYPES['GET_TABLE_DATA'],
             'sender_id': self.client_id,
             'timestamp': datetime.now().isoformat(),
             'data': {
+                'request_id': request_id,  # Incluir request_id en el mensaje
                 'table_name': table_name,
                 'page': page,
                 'page_size': page_size
@@ -370,7 +484,7 @@ class WebScrapperClient:
         }
         
         with self.requests_lock:
-            self.pending_db_requests[request_key] = {
+            self.pending_db_requests[request_id] = {
                 'type': 'data',
                 'table_name': table_name,
                 'page': page,
@@ -380,18 +494,22 @@ class WebScrapperClient:
         success = self.router_connection.send_message(message)
         
         if success:
-            logging.info(f"Petición de datos de tabla '{table_name}' enviada (página {page})")
-            return request_key, None
+            logging.info(f"Petición de datos de tabla '{table_name}' enviada (página {page}, request_id={request_id})")
+            return request_id, None
         else:
             with self.requests_lock:
-                if request_key in self.pending_db_requests:
-                    del self.pending_db_requests[request_key]
+                if request_id in self.pending_db_requests:
+                    del self.pending_db_requests[request_id]
             return None, "Error enviando petición"
     
     def get_db_response(self, request_id):
-        """Obtiene respuesta de una petición de BD"""
+        """Obtiene respuesta de una petición de BD y la elimina del caché"""
         with self.requests_lock:
-            return self.completed_db_responses.get(request_id)
+            response = self.completed_db_responses.get(request_id)
+            if response:
+                # Eliminar la respuesta del caché para evitar reutilizarla
+                del self.completed_db_responses[request_id]
+            return response
     
     def stop(self):
         """Detiene el cliente"""
@@ -464,17 +582,19 @@ class WebHandler(BaseHTTPRequestHandler):
                 
                 request_id, error = client.request_table_data(table_name, page, page_size)
                 if request_id:
-                    # Esperar respuesta (con timeout)
+                    # Esperar respuesta (con timeout aumentado)
                     import time
-                    timeout = 5
+                    timeout = 10  # Aumentado de 5 a 10 segundos
                     start = time.time()
                     while time.time() - start < timeout:
                         response = client.get_db_response(request_id)
                         if response:
+                            logging.info(f"✓ Respuesta de tabla '{table_name}' recibida en {time.time() - start:.2f}s")
                             self.send_json_response(response)
                             return
                         time.sleep(0.1)
-                    self.send_json_response({'success': False, 'message': 'Timeout esperando respuesta'})
+                    logging.warning(f"Timeout esperando datos de tabla '{table_name}' (>{timeout}s)")
+                    self.send_json_response({'success': False, 'message': f'Timeout esperando respuesta del servidor (>{timeout}s). Intenta de nuevo.', 'error': 'timeout'})
                 else:
                     self.send_json_response({'success': False, 'message': error}, 500)
             else:

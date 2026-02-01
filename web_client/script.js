@@ -106,11 +106,15 @@ async function handleSingleSubmit() {
         if (data.success) {
             showMessage(`Petición enviada exitosamente. ID: ${data.task_id}`, 'success');
             
-            // Agregar tarea al estado
+            const sentAt = Date.now();
+            console.log(`[TIMING] Petición ${data.task_id} ENVIADA en timestamp: ${sentAt}`);
+            
+            // Agregar tarea al estado con timestamp de envío
             state.tasks[data.task_id] = {
                 url: url,
                 status: 'pending',
-                timestamp: new Date().toISOString()
+                timestamp: new Date().toISOString(),
+                requestSentAt: sentAt  // Tiempo de envío
             };
             
             // Limpiar formulario
@@ -200,11 +204,15 @@ async function handleMultipleSubmit() {
                 const data = await response.json();
                 
                 if (data.success) {
-                    // Agregar tarea al estado
+                    const sentAt = Date.now();
+                    console.log(`[TIMING] Petición ${data.task_id} ENVIADA en timestamp: ${sentAt}`);
+                    
+                    // Agregar tarea al estado con timestamp de envío
                     state.tasks[data.task_id] = {
                         url: url,
                         status: 'pending',
-                        timestamp: new Date().toISOString()
+                        timestamp: new Date().toISOString(),
+                        requestSentAt: sentAt  // Tiempo de envío
                     };
                     
                     // Iniciar polling para esta tarea
@@ -296,7 +304,7 @@ async function updateStatus() {
 }
 
 async function pollResult(taskId) {
-    const maxAttempts = 60; // 5 minutos (60 * 5 segundos)
+    const maxAttempts = 3000; // 5 minutos (3000 * 100ms = 300 segundos)
     let attempts = 0;
     
     const interval = setInterval(async () => {
@@ -315,12 +323,23 @@ async function pollResult(taskId) {
             if (data.success && data.result) {
                 clearInterval(interval);
                 
+                // Calcular tiempo de respuesta INMEDIATAMENTE al recibir
+                const receivedAt = Date.now();
+                const sentAt = state.tasks[taskId].requestSentAt || receivedAt;
+                const responseTimeMs = receivedAt - sentAt;
+                
+                console.log(`[TIMING] Resultado ${taskId} RECIBIDO en timestamp: ${receivedAt}`);
+                console.log(`[TIMING] Tiempo transcurrido: ${responseTimeMs}ms (${(responseTimeMs/1000).toFixed(3)}s)`);
+                console.log(`[TIMING] Sent: ${sentAt}, Received: ${receivedAt}, Diff: ${responseTimeMs}ms`);
+                
                 // Actualizar tarea en el estado
                 state.tasks[taskId] = {
                     ...state.tasks[taskId],
                     status: 'completed',
                     result: data.result.result,
-                    completedAt: data.result.timestamp
+                    completedAt: data.result.timestamp,
+                    requestSentAt: sentAt,
+                    responseTime: (responseTimeMs / 1000).toFixed(3)  // 3 decimales para mayor precisión
                 };
                 
                 // Actualizar vista
@@ -332,7 +351,7 @@ async function pollResult(taskId) {
         } catch (error) {
             console.error(`Error obteniendo resultado para ${taskId}:`, error);
         }
-    }, 5000); // Polling cada 5 segundos
+    }, 100); // Polling cada 100ms para medición precisa del tiempo
 }
 
 function renderResults() {
@@ -461,7 +480,7 @@ function renderResultCard(taskId, task) {
             </div>
             <div class="result-meta">
                 <strong>ID:</strong> ${taskId} | 
-                <strong>Enviada:</strong> ${timestamp}
+                <strong>Enviada:</strong> ${timestamp}${task.responseTime ? ` | <span style="color: var(--success-color);">⚡ ${task.responseTime}s</span>` : ' | <span style="color: red;">⚡ 999999.999s [ERROR: NO SE MIDIÓ]</span>'}
             </div>
             <div class="result-content collapsed" id="content-${taskId}">
                 ${resultHTML}
@@ -527,8 +546,17 @@ document.getElementById('next-page-btn').addEventListener('click', () => changeP
 
 async function loadTables() {
     const btn = document.getElementById('load-tables-btn');
+    const loadingDiv = document.getElementById('tables-loading');
+    const tablesListDiv = document.getElementById('tables-list');
+    const tableViewerDiv = document.getElementById('table-viewer');
+    
+    // Deshabilitar botón y ocultar contenido anterior
     btn.disabled = true;
-    btn.textContent = '⏳ Cargando...';
+    tablesListDiv.classList.add('hidden');
+    tableViewerDiv.classList.add('hidden');
+    
+    // Mostrar indicador de carga
+    loadingDiv.classList.remove('hidden');
     
     try {
         const response = await fetch('/api/tables');
@@ -537,17 +565,20 @@ async function loadTables() {
         if (data.success) {
             dbState.tables = data.tables;
             renderTables();
-            document.getElementById('tables-list').classList.remove('hidden');
+            tablesListDiv.classList.remove('hidden');
             showMessage(`${data.tables.length} tabla(s) cargadas`, 'success');
         } else {
             showMessage(`Error: ${data.error || 'No se pudieron cargar las tablas'}`, 'error');
+            tablesListDiv.classList.add('hidden');
         }
     } catch (error) {
         console.error('Error cargando tablas:', error);
         showMessage('Error de conexión al cargar tablas', 'error');
+        tablesListDiv.classList.add('hidden');
     } finally {
+        // Ocultar indicador de carga y rehabilitar botón
+        loadingDiv.classList.add('hidden');
         btn.disabled = false;
-        btn.textContent = '🔄 Cargar Tablas';
     }
 }
 
@@ -574,27 +605,63 @@ async function loadTableData(tableName, page = 1) {
     const dataContainer = document.getElementById('table-data-container');
     const tableTitleEl = document.getElementById('current-table-name');
     
+    // Actualizar título y mostrar visor
     tableTitleEl.textContent = `📊 ${tableName}`;
-    dataContainer.innerHTML = '<p>⏳ Cargando datos...</p>';
     tableViewer.classList.remove('hidden');
+    
+    // Mostrar indicador de carga con spinner
+    dataContainer.innerHTML = `
+        <div style="text-align: center; padding: 40px;">
+            <div class="spinner" style="margin: 0 auto 20px;"></div>
+            <p style="color: var(--text-secondary);">⏳ Cargando datos de la tabla...</p>
+            <p style="color: var(--text-secondary); font-size: 0.9rem;">Esperando respuesta del servidor...</p>
+        </div>
+    `;
+    
+    // Guardar tiempo de inicio JUSTO antes del fetch
+    const requestStartTime = Date.now();
+    console.log(`[TIMING] Petición tabla "${tableName}" ENVIADA en timestamp: ${requestStartTime}`);
     
     try {
         const response = await fetch(`/api/table/${tableName}?page=${page}&page_size=${dbState.pageSize}`);
         const data = await response.json();
         
+        // Calcular tiempo de respuesta inmediatamente después de recibir
+        const receivedAt = Date.now();
+        const responseTime = ((receivedAt - requestStartTime) / 1000).toFixed(3);
+        
+        console.log(`[TIMING] Respuesta tabla "${tableName}" RECIBIDA en timestamp: ${receivedAt}`);
+        console.log(`[TIMING] Tiempo transcurrido: ${receivedAt - requestStartTime}ms (${responseTime}s)`);
+        console.log(`[TIMING] Sent: ${requestStartTime}, Received: ${receivedAt}, Diff: ${receivedAt - requestStartTime}ms`);
+        
         if (data.success) {
-            renderTableData(data);
+            renderTableData(data, responseTime);
             updatePaginationControls(data.pagination);
         } else {
-            dataContainer.innerHTML = `<p class="error-message">❌ Error: ${escapeHtml(data.error)}</p>`;
+            dataContainer.innerHTML = `
+                <div style="text-align: center; padding: 40px;">
+                    <p class="error-message">❌ Error: ${escapeHtml(data.error || data.message || 'Error desconocido')}</p>
+                    <button onclick="loadTableData('${escapeHtml(tableName)}', ${page})" class="btn-secondary" style="margin-top: 15px;">
+                        🔄 Reintentar
+                    </button>
+                </div>
+            `;
         }
     } catch (error) {
         console.error('Error cargando datos de tabla:', error);
-        dataContainer.innerHTML = '<p class="error-message">❌ Error de conexión</p>';
+        dataContainer.innerHTML = `
+            <div style="text-align: center; padding: 40px;">
+                <p class="error-message">❌ Error de conexión</p>
+                <p style="color: var(--text-secondary); margin-top: 10px;">No se pudo conectar con el servidor</p>
+                <button onclick="loadTableData('${escapeHtml(tableName)}', ${page})" class="btn-secondary" style="margin-top: 15px;">
+                    🔄 Reintentar
+                </button>
+            </div>
+        `;
     }
 }
 
-function renderTableData(data) {
+function renderTableData(data, responseTime = null) {
     const container = document.getElementById('table-data-container');
     
     if (!data.rows || data.rows.length === 0) {
@@ -605,8 +672,9 @@ function renderTableData(data) {
     const columns = data.columns;
     const rows = data.rows;
     
-    // Agregar información de la tabla
-    let tableHTML = `<div class="table-info">📊 ${data.pagination.total_rows} registro(s) • ${columns.length} columna(s)</div>`;
+    // Agregar información de la tabla con tiempo de respuesta
+    const timeInfo = responseTime ? ` • <span style="color: var(--success-color); font-weight: 500;">⚡ ${responseTime}s</span>` : '';
+    let tableHTML = `<div class="table-info">📊 ${data.pagination.total_rows} registro(s) • ${columns.length} columna(s)${timeInfo}</div>`;
     tableHTML += '<table class="data-table"><thead><tr>';
     columns.forEach(col => {
         tableHTML += `<th>${escapeHtml(col)}</th>`;
