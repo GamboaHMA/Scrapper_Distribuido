@@ -158,12 +158,20 @@ class RouterNode(Node):
             self._handle_get_table_data_request
         )
         self.add_persistent_message_handler(
+            MessageProtocol.MESSAGE_TYPES['EXPORT_ALL_DATA'],
+            self._handle_export_all_data_request
+        )
+        self.add_persistent_message_handler(
             MessageProtocol.MESSAGE_TYPES['LIST_TABLES_RESPONSE'],
             self._handle_list_tables_response
         )
         self.add_persistent_message_handler(
             MessageProtocol.MESSAGE_TYPES['GET_TABLE_DATA_RESPONSE'],
             self._handle_get_table_data_response
+        )
+        self.add_persistent_message_handler(
+            MessageProtocol.MESSAGE_TYPES['EXPORT_ALL_DATA_RESPONSE'],
+            self._handle_export_all_data_response
         )
         
         # Handler temporal para BD_QUERY_RESPONSE desde subordinados BD (socket temporal)
@@ -628,17 +636,20 @@ class RouterNode(Node):
         logging.info(f"✓ BD_QUERY enviada a BD para task {task_id}, URL: {url}")
     
     def _connect_to_external_bosses(self):
-        """Conecta con los jefes de BD y Scrapper"""
-        logging.info("Conectando con jefes externos (BD y Scrapper)...")
+        """Conecta con los jefes de BD y Scrapper - ROUTER VERSION (búsqueda activa)"""
+        logging.info("🔍 Router iniciando búsqueda activa de jefes externos (BD y Scrapper)...")
+        logging.info(f"external_bosses disponibles: {list(self.external_bosses.keys())}")
         
         for node_type in self.external_bosses.keys():
-            logging.info(f"Iniciando thread de búsqueda periódica para jefe {node_type}")
+            logging.info(f"⚙️ Iniciando thread de búsqueda periódica para jefe {node_type}")
             threading.Thread(
                 target=self._periodic_boss_search,
                 args=(node_type,),
                 daemon=True,
                 name=f"boss-search-{node_type}"
             ).start()
+        
+        logging.info(f"✓ {len(self.external_bosses)} threads de búsqueda iniciados")
         # # Iniciar búsqueda periódica para BD
         # threading.Thread(
         #     target=self._periodic_boss_search,
@@ -799,6 +810,10 @@ class RouterNode(Node):
                 boss_profile.set_connection(new_connection)
                 logging.info(f"✓ Conexión con jefe {node_type} establecida exitosamente")
                 
+                # Enviar información de OTROS jefes externos que conocemos
+                # Esto permite que todos los jefes conozcan las IPs de todos los demás
+                self._send_other_bosses_info(node_type, new_connection)
+                
                 # Iniciar heartbeats
                 # threading.Thread(
                 #     target=self._heartbeat_loop,
@@ -814,6 +829,67 @@ class RouterNode(Node):
             logging.error(f"No se pudo conectar con jefe {node_type} en {boss_ip}")
             boss_profile.clear_connection()
     
+    def _send_other_bosses_info(self, target_node_type, connection):
+        """
+        Intercambia información de jefes entre todos los jefes conectados.
+        
+        Cuando un nuevo jefe se conecta:
+        1. Le envía info de TODOS los otros jefes al nuevo jefe
+        2. Notifica a TODOS los otros jefes sobre el nuevo jefe
+        
+        Args:
+            target_node_type: Tipo del nuevo jefe que acaba de conectarse ('bd' o 'scrapper')
+            connection: NodeConnection con el nuevo jefe
+        """
+        # PASO 1: Enviar al NUEVO jefe la info de TODOS los OTROS jefes existentes
+        other_bosses_for_new = {}
+        
+        for boss_type, boss_profile in self.external_bosses.items():
+            # Solo incluir jefes que NO sean el nuevo y que estén conectados
+            if boss_type != target_node_type and boss_profile.is_connected():
+                other_bosses_for_new[boss_type] = {
+                    'ip': boss_profile.connection.ip,
+                    'port': boss_profile.port
+                }
+        
+        if other_bosses_for_new:
+            # Enviar al nuevo jefe
+            msg_to_new = self._create_message(
+                MessageProtocol.MESSAGE_TYPES['NEW_EXTERNAL_BOSS'],
+                {'bosses': other_bosses_for_new}
+            )
+            
+            if connection.send_message(msg_to_new):
+                logging.info(f"📤 Enviado a {target_node_type} info de {len(other_bosses_for_new)} jefe(s): {list(other_bosses_for_new.keys())}")
+            else:
+                logging.warning(f"No se pudo enviar info de jefes a {target_node_type}")
+        
+        # PASO 2: Notificar a TODOS los OTROS jefes sobre el NUEVO jefe
+        new_boss_info = {
+            target_node_type: {
+                'ip': connection.ip,
+                'port': self.external_bosses[target_node_type].port
+            }
+        }
+        
+        msg_about_new = self._create_message(
+            MessageProtocol.MESSAGE_TYPES['NEW_EXTERNAL_BOSS'],
+            {'bosses': new_boss_info}
+        )
+        
+        notified_count = 0
+        for boss_type, boss_profile in self.external_bosses.items():
+            # Enviar a todos EXCEPTO al nuevo jefe
+            if boss_type != target_node_type and boss_profile.is_connected():
+                if boss_profile.connection.send_message(msg_about_new):
+                    notified_count += 1
+                    logging.info(f"📤 Notificado a {boss_type} sobre nuevo jefe {target_node_type}")
+                else:
+                    logging.warning(f"No se pudo notificar a {boss_type} sobre {target_node_type}")
+        
+        if notified_count == 0 and len(other_bosses_for_new) == 0:
+            logging.debug(f"No hay otros jefes para intercambiar info con {target_node_type}")
+    
     def start_boss_tasks(self):
         """
         Tareas específicas del jefe Router.
@@ -823,7 +899,10 @@ class RouterNode(Node):
         logging.info(f"Soy el router jefe: {self.i_am_boss}")
         logging.info(f"external_bosses keys: {list(self.external_bosses.keys())}")
         
-        # Conectar con jefes externos
+        # Conectar con jefes externos (BD y Scrapper)
+        # IMPORTANTE: Se llama aquí porque cuando el router inicia directamente como jefe
+        # (sin elecciones), _initialize_boss() no se ejecuta
+        logging.info("Conectando con jefes externos (BD y Scrapper)...")
         self._connect_to_external_bosses()
         
         # Iniciar loop de procesamiento de tareas
@@ -1002,6 +1081,99 @@ class RouterNode(Node):
         client_connection.send_message(message)
         table_name = data.get('table_name', 'unknown')
         logging.info(f"Datos de tabla '{table_name}' enviados a {client_connection.node_id}")
+    
+    def _handle_export_all_data_request(self, node_connection, message):
+        """
+        Handler para solicitud de exportación de todos los datos.
+        Reenvía la petición a la BD y guarda referencia del cliente.
+        
+        Args:
+            node_connection: Conexión con el cliente web
+            message: Mensaje con la solicitud
+        """
+        data = message.get('data', {})
+        request_id = data.get('request_id')
+        
+        logging.info(f"Solicitud de exportación de datos recibida de {node_connection.node_id} (request_id={request_id})")
+        
+        # Verificar que BD esté disponible
+        bd_profile = self.external_bosses.get('bd')
+        if not bd_profile or not bd_profile.is_connected():
+            logging.error("BD no disponible para exportación")
+            error_response = {
+                'type': MessageProtocol.MESSAGE_TYPES['EXPORT_ALL_DATA_RESPONSE'],
+                'sender_id': self.node_id,
+                'timestamp': datetime.now().isoformat(),
+                'data': {
+                    'request_id': request_id,
+                    'success': False,
+                    'error': 'BD no disponible'
+                }
+            }
+            node_connection.send_message(error_response)
+            return
+        
+        # Guardar referencia del cliente para cuando llegue la respuesta
+        if not hasattr(self, '_pending_db_requests'):
+            self._pending_db_requests = {}
+        self._pending_db_requests[request_id] = node_connection
+        
+        # Reenviar petición a BD
+        bd_message = {
+            'type': MessageProtocol.MESSAGE_TYPES['EXPORT_ALL_DATA'],
+            'sender_id': self.node_id,
+            'timestamp': datetime.now().isoformat(),
+            'data': {
+                'request_id': request_id
+            }
+        }
+        
+        success = bd_profile.connection.send_message(bd_message)
+        
+        if success:
+            logging.info(f"Solicitud de exportación reenviada a BD jefe")
+        else:
+            logging.error("Error reenviando solicitud de exportación a BD")
+            # Limpiar referencia
+            self._pending_db_requests.pop(request_id, None)
+            # Enviar error al cliente
+            error_response = {
+                'type': MessageProtocol.MESSAGE_TYPES['EXPORT_ALL_DATA_RESPONSE'],
+                'sender_id': self.node_id,
+                'timestamp': datetime.now().isoformat(),
+                'data': {
+                    'request_id': request_id,
+                    'success': False,
+                    'error': 'Error comunicando con BD'
+                }
+            }
+            node_connection.send_message(error_response)
+    
+    def _handle_export_all_data_response(self, node_connection, message):
+        """
+        Handler para respuesta de exportación desde BD.
+        Reenvía la respuesta al cliente que la solicitó.
+        
+        Args:
+            node_connection: Conexión con BD
+            message: Mensaje con la respuesta (puede ser muy grande)
+        """
+        data = message.get('data', {})
+        request_id = data.get('request_id')
+        
+        if not hasattr(self, '_pending_db_requests'):
+            logging.warning("No hay peticiones pendientes de BD")
+            return
+        
+        client_connection = self._pending_db_requests.pop(request_id, None)
+        if not client_connection:
+            logging.warning(f"No se encontró cliente para request_id {request_id}")
+            return
+        
+        # Reenviar respuesta al cliente
+        client_connection.send_message(message)
+        urls_count = len(data.get('data', {}).get('urls', []))
+        logging.info(f"Exportación de datos ({urls_count} URLs) enviada a {client_connection.node_id}")
 
 
 if __name__ == "__main__":

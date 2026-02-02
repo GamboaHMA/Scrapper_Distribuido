@@ -662,13 +662,21 @@ class ScrapperNode(Node):
     
     def _send_result_to_database(self, task_id, result):
         """Envía resultado al jefe de BD"""
-        bd_profile = self.external_bosses.get('bd')
+        # Si soy jefe, buscar en bosses_connections (conexión entrante del BD)
+        # Si soy subordinado, buscar en external_bosses (conexión saliente al BD)
+        bd_conn = None
         
-        if not bd_profile or not bd_profile.is_connected():
+        if self.i_am_boss:
+            # Jefe: BD se conectó a mí, buscar en bosses_connections
+            bd_conn = self.bosses_connections.get('bd')
+        else:
+            # Subordinado: yo me conecté al BD, buscar en external_bosses
+            bd_profile = self.external_bosses.get('bd')
+            bd_conn = bd_profile.connection if bd_profile else None
+        
+        if not bd_conn or not bd_conn.is_connected():
             logging.warning(f"No hay conexión con BD para enviar resultado de tarea {task_id}")
             return
-        
-        bd_conn = bd_profile.connection
         
         save_msg = self._create_message(
             MessageProtocol.MESSAGE_TYPES['SAVE_DATA'],
@@ -686,13 +694,21 @@ class ScrapperNode(Node):
     
     def _notify_router_task_completed(self, task_id, result):
         """Notifica al router que una tarea fue completada"""
-        router_profile = self.external_bosses.get('router')
+        # Si soy jefe, buscar en bosses_connections (conexión entrante del Router)
+        # Si soy subordinado, buscar en external_bosses (conexión saliente al Router)
+        router_conn = None
         
-        if not router_profile or not router_profile.is_connected():
+        if self.i_am_boss:
+            # Jefe: Router se conectó a mí, buscar en bosses_connections
+            router_conn = self.bosses_connections.get('router')
+        else:
+            # Subordinado: yo me conecté al Router, buscar en external_bosses
+            router_profile = self.external_bosses.get('router')
+            router_conn = router_profile.connection if router_profile else None
+        
+        if not router_conn or not router_conn.is_connected():
             logging.warning(f"No hay conexión con Router para notificar tarea {task_id}")
             return
-        
-        router_conn = router_profile.connection
         
         completion_msg = self._create_message(
             MessageProtocol.MESSAGE_TYPES['TASK_RESULT'],
@@ -740,64 +756,18 @@ class ScrapperNode(Node):
     #============= PARA DESCUBRIR A LOS OTROS JEFES ==============
 
     def _connect_to_external_bosses(self):
-        """Conecta con los jefes de BD y Router"""
-        logging.info("Conectando con jefes externos (BD y Router)...")
-        
-        for node_type in self.external_bosses.keys():
-            threading.Thread(
-                target=self._periodic_boss_search,
-                args=(node_type,),
-                daemon=True
-            ).start()
-
-    def _periodic_boss_search(self, node_type):
         """
-        Busca periódicamente al jefe de un tipo de nodo hasta encontrarlo.
-        Una vez conectado, detiene la búsqueda.
-        
-        Args:
-            node_type: Tipo de nodo a buscar ('bd' o 'router')
+        El Scrapper NO busca activamente a Router/BD.
+        Espera a que el Router se conecte a él (modo pasivo).
+        El Router es el único que hace búsquedas DNS activas.
         """
+        logging.info("Scrapper en modo pasivo: esperando conexiones de Router...")
+        # El Scrapper NO busca activamente a Router/BD.
+        # La conexión se establece cuando:
+        # 1. El Router se conecta al Scrapper (modo pasivo)
+        # 2. El jefe Scrapper replica la info de Router a subordinados
+        # 3. Los subordinados se conectan al Router usando _handle_external_bosses_info
 
-        retry_interval = 5  # segundos entre intentos
-        boss_profile = self.external_bosses[node_type]
-
-        logging.info(f"Iniciando búsqueda periódica del jefe {node_type}...")
-
-        while self.running:
-            # Si ya estamos conectados, solo verificar cada cierto tiempo
-            if boss_profile.is_connected():
-                logging.debug(f"Jefe {node_type} ya conectado, esperando...")
-                time.sleep(retry_interval)
-                continue
-            
-            # Si no estamos conectados, intentar encontrarlo
-            logging.debug(f"Buscando jefe {node_type}...")
-            
-            # Intentar descubrir nodos
-            node_ips = self.discover_nodes(node_type, boss_profile.port)
-            
-            if node_ips:
-                # Buscar el jefe en la lista
-                boss_ip = self._find_boss_in_list(node_ips, node_type)
-                
-                if boss_ip:
-                    logging.info(f"Jefe {node_type} encontrado en {boss_ip}")
-                    self._connect_to_boss(node_type, boss_ip)
-                    
-                    # Verificar que la conexión fue exitosa
-                    if boss_profile.is_connected():
-                        logging.info(f"✓ Conexión con jefe {node_type} establecida exitosamente")
-                    else:
-                        logging.warning(f"✗ No se pudo establecer conexión con {node_type} en {boss_ip}")
-                else:
-                    logging.debug(f"Nodos {node_type} encontrados pero ninguno es jefe")
-            else:
-                logging.debug(f"No se encontraron nodos {node_type} en la red")
-            
-            # Esperar antes del siguiente intento
-            time.sleep(retry_interval)
-        
     def _find_boss_in_list(self, ip_list, node_type):
         """
         Encuentra el jefe en una lista de IPs consultando temporalmente.
@@ -897,7 +867,7 @@ class ScrapperNode(Node):
         logging.info("=== INICIANDO TAREAS DEL JEFE SCRAPPER ===")
         
         # Conectar con jefes externos
-        self._connect_to_external_bosses()
+        # self._connect_to_external_bosses()
         self._start_task_assignment_thread()
         logging.info("✓ Jefe Scrapper operativo")
     

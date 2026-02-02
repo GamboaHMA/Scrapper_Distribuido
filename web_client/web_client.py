@@ -373,6 +373,22 @@ class WebScrapperClient:
                     
                     if not found:
                         logging.warning(f"Respuesta de tabla '{table_name}' recibida sin petición pendiente")
+        
+        elif msg_type == MessageProtocol.MESSAGE_TYPES['EXPORT_ALL_DATA_RESPONSE']:
+            data = message.get('data', {})
+            request_id = data.get('request_id', '')
+            success = data.get('success', False)
+            
+            logging.info(f"EXPORT_ALL_DATA_RESPONSE recibido: success={success}, request_id={request_id}")
+            
+            with self.requests_lock:
+                if request_id and request_id in self.pending_db_requests:
+                    self.completed_db_responses[request_id] = data
+                    del self.pending_db_requests[request_id]
+                    urls_count = len(data.get('data', {}).get('urls', []))
+                    logging.info(f"✓ Exportación completa recibida ({urls_count} URLs, request_id={request_id})")
+                else:
+                    logging.warning(f"Respuesta de exportación recibida sin petición pendiente (request_id={request_id})")
 
     
     def request_scraping(self, url):
@@ -502,6 +518,42 @@ class WebScrapperClient:
                     del self.pending_db_requests[request_id]
             return None, "Error enviando petición"
     
+    def request_export_all_data(self):
+        """Solicita exportación de todos los datos almacenados en BD"""
+        if not self.router_connection or not self.router_connection.is_connected():
+            if not self.connect():
+                return None, "No hay conexión con el router"
+        
+        # Usar ID único para esta petición
+        import uuid
+        request_id = f"export_{uuid.uuid4().hex[:8]}"
+        
+        message = {
+            'type': MessageProtocol.MESSAGE_TYPES['EXPORT_ALL_DATA'],
+            'sender_id': self.client_id,
+            'timestamp': datetime.now().isoformat(),
+            'data': {
+                'request_id': request_id
+            }
+        }
+        
+        with self.requests_lock:
+            self.pending_db_requests[request_id] = {
+                'type': 'export',
+                'timestamp': datetime.now()
+            }
+        
+        success = self.router_connection.send_message(message)
+        
+        if success:
+            logging.info(f"Petición de exportación de datos enviada (request_id={request_id})")
+            return request_id, None
+        else:
+            with self.requests_lock:
+                if request_id in self.pending_db_requests:
+                    del self.pending_db_requests[request_id]
+            return None, "Error enviando petición"
+    
     def get_db_response(self, request_id):
         """Obtiene respuesta de una petición de BD y la elimina del caché"""
         with self.requests_lock:
@@ -567,6 +619,25 @@ class WebHandler(BaseHTTPRequestHandler):
                         return
                     time.sleep(0.1)
                 logging.warning("Timeout esperando respuesta de lista de tablas")
+                self.send_json_response({'success': False, 'message': 'Timeout esperando respuesta'})
+            else:
+                self.send_json_response({'success': False, 'message': error}, 500)
+        elif parsed_path.path == '/api/export':
+            # API: Exportar todos los datos
+            request_id, error = client.request_export_all_data()
+            if request_id:
+                # Esperar respuesta (con timeout extendido ya que puede ser mucha data)
+                import time
+                timeout = 30  # 30 segundos para exportación completa
+                start = time.time()
+                while time.time() - start < timeout:
+                    response = client.get_db_response(request_id)
+                    if response:
+                        logging.info(f"Respuesta BD recibida para export: success={response.get('success')}, urls_count={len(response.get('data', {}).get('urls', []))}")
+                        self.send_json_response(response)
+                        return
+                    time.sleep(0.1)
+                logging.warning("Timeout esperando respuesta de exportación")
                 self.send_json_response({'success': False, 'message': 'Timeout esperando respuesta'})
             else:
                 self.send_json_response({'success': False, 'message': error}, 500)

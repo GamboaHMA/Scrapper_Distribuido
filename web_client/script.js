@@ -540,6 +540,7 @@ const dbState = {
 
 // Inicializar eventos de DB
 document.getElementById('load-tables-btn').addEventListener('click', loadTables);
+document.getElementById('export-all-btn').addEventListener('click', exportAllData);
 document.getElementById('close-table-btn').addEventListener('click', closeTableViewer);
 document.getElementById('prev-page-btn').addEventListener('click', () => changePage(-1));
 document.getElementById('next-page-btn').addEventListener('click', () => changePage(1));
@@ -721,4 +722,50 @@ function changePage(delta) {
 function closeTableViewer() {
     document.getElementById('table-viewer').classList.add('hidden');
     dbState.currentTable = null;
+}
+
+async function exportAllData() {
+    const btn = document.getElementById('export-all-btn');
+    const originalText = btn.innerHTML;
+    
+    // Deshabilitar botón y mostrar estado de carga
+    btn.disabled = true;
+    btn.innerHTML = '⏳ Exportando...';
+    
+    try {
+        const response = await fetch('/api/export');
+        
+        if (!response.ok) {
+            throw new Error(`Error HTTP: ${response.status}`);
+        }
+        
+        const data = await response.json();
+        
+        if (data.success) {
+            // Crear archivo JSON para descarga
+            const jsonStr = JSON.stringify(data.data, null, 2);
+            const blob = new Blob([jsonStr], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            
+            // Crear enlace de descarga temporal
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `scrapper-data-${new Date().toISOString().split('T')[0]}.json`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+            
+            showMessage(`✓ Datos exportados correctamente (${data.data.urls?.length || 0} URLs)`, 'success');
+        } else {
+            showMessage(`Error: ${data.error || 'No se pudieron exportar los datos'}`, 'error');
+        }
+    } catch (error) {
+        console.error('Error exportando datos:', error);
+        showMessage('Error de conexión al exportar datos', 'error');
+    } finally {
+        // Rehabilitar botón y restaurar texto
+        btn.disabled = false;
+        btn.innerHTML = originalText;
+    }
 }
