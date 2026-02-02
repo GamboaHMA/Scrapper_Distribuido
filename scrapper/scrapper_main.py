@@ -206,6 +206,43 @@ class ScrapperNode(Node):
             self._try_assign_pending_tasks()
         return reassigned
     
+    def _handle_external_bosses_info(self, node_connection, message_dict):
+        """
+        Override: Cuando recibe info de jefes externos, actualiza cache Y se conecta.
+        Esto es crítico para que subordinados se conecten al router después de elecciones.
+        
+        Args:
+            node_connection: Conexión con mi jefe scrapper
+            message_dict: Mensaje con info de jefes externos (router, bd)
+        """
+        # Llamar al método base para actualizar cache
+        super()._handle_external_bosses_info(node_connection, message_dict)
+        
+        # Ahora conectarse a los jefes externos
+        data = message_dict.get('data', {})
+        bosses_info = data.get('bosses', {})
+        
+        for node_type, info in bosses_info.items():
+            boss_ip = info.get('ip')
+            boss_port = info.get('port')
+            
+            if node_type in self.external_bosses:
+                boss_profile = self.external_bosses[node_type]
+                
+                # Solo conectar si no estamos conectados o si la IP cambió
+                current_ip = boss_profile.connection.ip if boss_profile.connection else None
+                
+                if not boss_profile.is_connected() or current_ip != boss_ip:
+                    logging.info(f"🔌 Conectando a jefe externo {node_type} en {boss_ip}:{boss_port}...")
+                    self._connect_to_boss(node_type, boss_ip)
+                    
+                    if boss_profile.is_connected():
+                        logging.info(f"✓ Conexión con jefe externo {node_type} establecida")
+                    else:
+                        logging.warning(f"✗ No se pudo conectar con jefe externo {node_type}")
+                else:
+                    logging.debug(f"Ya conectado a jefe externo {node_type} en {boss_ip}")
+    
     # ============= HANDLERS ESPECÍFICOS DE SCRAPPER =============
     
     def _handle_task_assignment_persistent(self, node_connection, message_dict):
@@ -429,6 +466,19 @@ class ScrapperNode(Node):
         
         logging.info(f"Nueva tarea recibida del router: {task_id}")
         
+        # Logging detallado de subordinados
+        total_subs = len(self.subordinates)
+        connected_subs = [node_id for node_id, conn in self.subordinates.items() if conn.is_connected()]
+        disconnected_subs = [node_id for node_id, conn in self.subordinates.items() if not conn.is_connected()]
+        
+        logging.info(f"📊 Estado de subordinados: {len(connected_subs)}/{total_subs} conectados")
+        if connected_subs:
+            logging.info(f"  ✓ Conectados: {', '.join(connected_subs)}")
+        if disconnected_subs:
+            logging.info(f"  ✗ Desconectados: {', '.join(disconnected_subs)}")
+        
+        logging.debug(f"Estado actual - Jefe ocupado: {self.is_busy}, Tareas pendientes: {self.task_queue.get_stats()['pending']}")
+        
         # Añadir a la cola
         self.task_queue.add_task(task_id, task_data)
         
@@ -499,21 +549,49 @@ class ScrapperNode(Node):
         if not self.i_am_boss:
             return
         
+        # Verificar si hay tareas pendientes primero
+        stats = self.task_queue.get_stats()
+        if stats['pending'] == 0:
+            return
+        
+        logging.debug(f"Intentando asignar tareas. Pendientes: {stats['pending']}")
+        
         # Obtener lista de trabajadores disponibles (subordinados + jefe)
         available_workers = []
         
         # Agregar subordinados disponibles
+        total_subordinates = len(self.subordinates)
+        connected_subordinates = 0
+        busy_subordinates = 0
+        available_subordinate_ids = []
+        
         for node_id, conn in self.subordinates.items():
-            if conn.is_connected() and not conn.is_busy:
-                available_workers.append(('subordinate', node_id, conn))
+            if conn.is_connected():
+                connected_subordinates += 1
+                if not conn.is_busy:
+                    available_workers.append(('subordinate', node_id, conn))
+                    available_subordinate_ids.append(node_id)
+                else:
+                    busy_subordinates += 1
+        
+        logging.info(f"🔍 Subordinados: {total_subordinates} totales, {connected_subordinates} conectados, "
+                     f"{busy_subordinates} ocupados, {len(available_subordinate_ids)} disponibles")
+        if available_subordinate_ids:
+            logging.info(f"  ✓ Disponibles para asignar: {', '.join(available_subordinate_ids)}")
         
         # Agregar el jefe si está disponible
+        boss_available = False
         if not self.is_busy:
             available_workers.append(('boss', self.node_id, None))
+            boss_available = True
+        
+        logging.debug(f"Jefe disponible: {boss_available} (is_busy={self.is_busy})")
         
         if not available_workers:
-            logging.debug("No hay trabajadores disponibles para asignar tareas")
+            logging.warning(f"No hay trabajadores disponibles para asignar {stats['pending']} tareas pendientes")
             return
+        
+        logging.info(f"Asignando tareas con {len(available_workers)} trabajadores disponibles")
         
         # Asignar tareas
         assigned_count = 0
@@ -578,7 +656,9 @@ class ScrapperNode(Node):
         
         if assigned_count > 0:
             stats = self.task_queue.get_stats()
-            logging.info(f"Asignadas {assigned_count} tareas. Cola: {stats}")
+            logging.info(f"✅ Asignadas {assigned_count} tareas. Cola actualizada: {stats}")
+        else:
+            logging.warning(f"⚠️ No se pudo asignar ninguna tarea")
     
     def _send_result_to_database(self, task_id, result):
         """Envía resultado al jefe de BD"""
@@ -682,35 +762,39 @@ class ScrapperNode(Node):
         retry_interval = 5  # segundos entre intentos
         boss_profile = self.external_bosses[node_type]
 
-        logging.info(f"Iniciando busqueda periodica del jefe {node_type}...")
+        logging.info(f"Iniciando búsqueda periódica del jefe {node_type}...")
 
         while self.running:
-            # Si ya estamos conectados, detener búsqueda
-            if not boss_profile.is_connected():
-                #logging.debug(f"Jefe {node_type} ya conectado, deteniendo búsqueda")
-                #break
+            # Si ya estamos conectados, solo verificar cada cierto tiempo
+            if boss_profile.is_connected():
+                logging.debug(f"Jefe {node_type} ya conectado, esperando...")
+                time.sleep(retry_interval)
+                continue
             
-                # Intentar descubrir nodos
-                node_ips = self.discover_nodes(node_type, boss_profile.port)
+            # Si no estamos conectados, intentar encontrarlo
+            logging.debug(f"Buscando jefe {node_type}...")
             
-                if node_ips:
-                    # Buscar el jefe en la lista
-                    boss_ip = self._find_boss_in_list(node_ips, node_type)
+            # Intentar descubrir nodos
+            node_ips = self.discover_nodes(node_type, boss_profile.port)
+            
+            if node_ips:
+                # Buscar el jefe en la lista
+                boss_ip = self._find_boss_in_list(node_ips, node_type)
                 
-                    if boss_ip:
-                        logging.info(f"Jefe {node_type} encontrado en {boss_ip}")
-                        self._connect_to_boss(node_type, boss_ip)
+                if boss_ip:
+                    logging.info(f"Jefe {node_type} encontrado en {boss_ip}")
+                    self._connect_to_boss(node_type, boss_ip)
                     
-                        # Verificar que la conexión fue exitosa
-                        if boss_profile.is_connected():
-                            logging.info(f"✓ Conexión con jefe {node_type} establecida")
-                            
+                    # Verificar que la conexión fue exitosa
+                    if boss_profile.is_connected():
+                        logging.info(f"✓ Conexión con jefe {node_type} establecida exitosamente")
                     else:
-                        logging.debug(f"Nodos {node_type} encontrados pero ninguno es jefe")
+                        logging.warning(f"✗ No se pudo establecer conexión con {node_type} en {boss_ip}")
                 else:
-                    logging.debug(f"No se encontraron nodos {node_type} en el DNS")
+                    logging.debug(f"Nodos {node_type} encontrados pero ninguno es jefe")
+            else:
+                logging.debug(f"No se encontraron nodos {node_type} en la red")
             
-            logging.info(f"Búsqueda periódica de jefe {node_type} finalizada")
             # Esperar antes del siguiente intento
             time.sleep(retry_interval)
         
