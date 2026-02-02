@@ -926,13 +926,17 @@ class RouterNode(Node):
             node_connection.send_message(error_response)
             return
         
+        # Usar el request_id del cliente si existe, o crear uno nuevo
+        request_id = data.get('request_id')
+        if not request_id:
+            request_id = f"table_data_{table_name}_{datetime.now().timestamp()}"
+        
         # Guardar referencia del cliente para responder después
-        request_id = f"table_data_{table_name}_{datetime.now().timestamp()}"
         if not hasattr(self, '_pending_db_requests'):
             self._pending_db_requests = {}
         self._pending_db_requests[request_id] = node_connection
         
-        # Reenviar petición a BD con identificador
+        # Reenviar petición a BD con el mismo identificador
         forward_message = {
             'type': MessageProtocol.MESSAGE_TYPES['GET_TABLE_DATA'],
             'sender_id': self.node_id,

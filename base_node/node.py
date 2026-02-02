@@ -226,11 +226,16 @@ class Node:
             {'bosses': bosses_info}
         )
         
-        # Enviar a todos los subordinados
+        # Enviar solo a subordinados conectados
+        sent_count = 0
         for node_id, conn in self.subordinates.items():
-            conn.send_message(message)
+            if conn.is_connected():
+                if conn.send_message(message):
+                    sent_count += 1
+            else:
+                logging.debug(f"Subordinado {node_id} desconectado, no se envía replicación")
         
-        logging.info(f"Información de {len(bosses_info)} jefes externos replicada a {len(self.subordinates)} subordinados")
+        logging.info(f"Información de {len(bosses_info)} jefes externos replicada a {sent_count}/{len(self.subordinates)} subordinados")
     
     def _connect_to_external_bosses(self):
         """
@@ -1077,9 +1082,13 @@ class Node:
         
         # 2. Verificar subordinados (si soy jefe)
         if self.i_am_boss and self.subordinates:
+            logging.debug(f"🔍 Verificando {len(self.subordinates)} subordinados...")
             for node_id, conn in list(self.subordinates.items()):
-                if not conn.is_connected():
-                    logging.warning(f"Subordinado {node_id} desconectado")
+                is_conn = conn.is_connected()
+                time_since = conn.get_time_since_last_heartbeat()
+                logging.debug(f"   - {node_id}: connected={is_conn}, último heartbeat hace {time_since:.1f}s")
+                if not is_conn:
+                    logging.warning(f"⚠️ Subordinado {node_id} desconectado (último heartbeat hace {time_since:.1f}s)")
                     dead_nodes.append(node_id)
             
             # Eliminar subordinados muertos
@@ -1514,21 +1523,26 @@ class Node:
             self.my_boss_profile.connection.disconnect()
             self.my_boss_profile.clear_connection()
         
-        # # Limpiar subordinados antiguos (por si acaso)
-        # old_subordinates = list(self.subordinates.keys())
-        # for node_id in old_subordinates:
-        #     conn = self.subordinates[node_id]
+        # Limpiar subordinados antiguos (heredados de replicación del jefe anterior)
+        # Esto es crítico en caso de partición de red
+        old_subordinates = list(self.subordinates.keys())
+        if old_subordinates:
+            logging.info(f"🧹 Limpiando {len(old_subordinates)} subordinados antiguos heredados...")
+            for node_id in old_subordinates:
+                conn = self.subordinates[node_id]
+                
+                # Reasignar tareas antes de desconectar
+                reassigned = self.reassign_tasks_from_subordinate(node_id)
+                
+                conn.disconnect()
+                logging.info(f"  ✓ Subordinado antiguo {node_id} desconectado")
             
-        #     # Reasignar tareas antes de desconectar
-        #     reassigned = self.task_queue.reassign_node_tasks(node_id)
-        #     if reassigned > 0:
-        #         logging.info(f"Reasignadas {reassigned} tareas del subordinado antiguo {node_id}")
+            # Limpiar diccionario
+            self.subordinates.clear()
+            logging.info("✅ Limpieza de subordinados completada")
             
-        #     conn.disconnect()
-        #     del self.subordinates[node_id]
-            
-        # #Esperar un tiempo para q todos los nodos procesen la desconexión del jefe anterior
-        # time.sleep(2)
+            # Esperar un tiempo para que todos los nodos procesen la desconexión del jefe anterior
+            time.sleep(2)
         
         logging.info("=== ENVIANDO ANUNCIO DE NUEVO JEFE ===")
         
@@ -1575,6 +1589,8 @@ class Node:
         self._connect_to_external_bosses()
         
         connected_count = 0
+        failed_ips = []  # Nodos que no respondieron
+        
         for ip in all_known_ips:
             if ip == self.ip:
                 continue
@@ -1586,7 +1602,16 @@ class Node:
                 connected_count += 1
                 logging.info(f"✓ Subordinado {ip} conectado exitosamente")
             else:
-                logging.warning(f"✗ No se pudo conectar con {ip}")
+                logging.warning(f"✗ No se pudo conectar con {ip} - será eliminado del registro")
+                failed_ips.append(ip)
+        
+        # Limpiar nodos inalcanzables del cache
+        # Esto es crítico en particiones de red para eliminar nodos de la otra partición
+        if failed_ips:
+            logging.info(f"🧹 Eliminando {len(failed_ips)} nodos inalcanzables del registro...")
+            for ip in failed_ips:
+                self.remove_node_from_registry(self.node_type, ip)
+                logging.info(f"  ✓ {ip} eliminado del nodes_cache")
         
         logging.info(f"=== JEFATURA ESTABLECIDA: {connected_count}/{len(all_known_ips)} subordinados conectados ===")
         

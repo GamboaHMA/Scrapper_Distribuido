@@ -133,13 +133,19 @@ class NodeConnection:
     def _start_heartbeat_monitor(self):
         """Inicia un hilo para monitorear heartbeats"""
         def heartbeat_monitor():
+            logging.info(f"🔍 HeartbeatMonitor iniciado para {self.node_id} (timeout: {self.heartbeat_timeout}s)")
             while self.connected and not self.heartbeat_monitor_stop_event.is_set():
                 time_since_last = self.get_time_since_last_heartbeat()
                 # Solo verificar timeout si ya ha pasado suficiente tiempo desde la conexión
                 if time_since_last is not None and time_since_last > self.heartbeat_timeout:
-                    logging.warning(f"No se recibió heartbeat de {self.node_id} en {time_since_last:.1f}s (timeout: {self.heartbeat_timeout}s). Desconectando.")
+                    logging.warning(f"⚠️ TIMEOUT: No se recibió heartbeat de {self.node_id} en {time_since_last:.1f}s (timeout: {self.heartbeat_timeout}s). Desconectando.")
                     self.disconnect()
                     break
+                
+                # Log periódico del estado (solo cada 60s para no saturar)
+                if time_since_last is not None and int(time_since_last) % 60 == 0:
+                    logging.debug(f"💓 HeartbeatMonitor: {self.node_id} - último heartbeat hace {time_since_last:.1f}s")
+                
                 time.sleep(10)  # Esperar 10 segundos antes de chequear de nuevo
         
         threading.Thread(
@@ -151,8 +157,10 @@ class NodeConnection:
     def _start_heartbeat_thread(self):
         """Inicia un hilo para enviar heartbeats periódicamente"""
         def heartbeat_sender():
-            # Esperar antes del primer heartbeat para dar tiempo a establecer la conexión
-            time.sleep(15)
+            # Esperar un poco para que la conexión se establezca completamente
+            # pero no tanto como para causar timeout en el otro extremo
+            time.sleep(2)
+            logging.info(f"💗 HeartbeatSender iniciado para {self.node_id} (intervalo: 15s)")
             
             while self.connected and not self.heartbeat_thread_stop_event.is_set():
                 self.send_heartbeat()
@@ -240,8 +248,9 @@ class NodeConnection:
                 # Actualizar último heartbeat si es un heartbeat
                 msg_type = message_dict.get('type')
                 if msg_type == MessageProtocol.MESSAGE_TYPES['HEARTBEAT']:
+                    time_since = self.get_time_since_last_heartbeat()
                     self.update_heartbeat()
-                    logging.debug(f"Heartbeat recibido de {self.node_id}")
+                    logging.debug(f"💓 Heartbeat recibido de {self.node_id} (último hace {time_since:.1f}s)")
                     # NO llamar callback para heartbeats, se manejan internamente
                     continue  # Saltar el callback y continuar con el siguiente mensaje
                 
