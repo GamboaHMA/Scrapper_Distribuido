@@ -417,7 +417,7 @@ class Node:
             self.nodes_cache[sender_node_type] = {}
         
         self.nodes_cache[sender_node_type][client_ip] = {
-            "port": self.port,
+            "port": data.get('node_port', self.port),
             "last_seen": datetime.now(),
             "is_boss": is_boss
         }

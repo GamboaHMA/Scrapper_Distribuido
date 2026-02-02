@@ -14,6 +14,7 @@ import os
 import logging
 import threading
 import time
+import json
 from datetime import datetime
 from queue import Queue, Empty
 
@@ -172,6 +173,18 @@ class RouterNode(Node):
         self.add_persistent_message_handler(
             MessageProtocol.MESSAGE_TYPES['EXPORT_ALL_DATA_RESPONSE'],
             self._handle_export_all_data_response
+        )
+        
+        # Handler temporal para LEADER_QUERY (reunificación de red)
+        self.add_temporary_message_handler(
+            MessageProtocol.MESSAGE_TYPES['LEADER_QUERY'],
+            self._handle_leader_query
+        )
+        
+        # Handler persistente para NEW_BOSS (reunificación - subordinado recibe nuevo jefe)
+        self.add_persistent_message_handler(
+            MessageProtocol.MESSAGE_TYPES['NEW_BOSS'],
+            self._handle_new_boss_persistent
         )
         
         # Handler temporal para BD_QUERY_RESPONSE desde subordinados BD (socket temporal)
@@ -908,7 +921,15 @@ class RouterNode(Node):
         # Iniciar loop de procesamiento de tareas
         threading.Thread(
             target=self._process_tasks_loop,
-            daemon=True
+            daemon=True,
+            name="TaskProcessor"
+        ).start()
+        
+        # Iniciar hilo de reunificación (busca otros routers jefe para unir particiones)
+        threading.Thread(
+            target=self._network_reunification_loop,
+            daemon=True,
+            name="NetworkReunification"
         ).start()
         
         logging.info("✓ Jefe Router operativo")
@@ -930,6 +951,388 @@ class RouterNode(Node):
             logging.warning(f"Dejando {pending_count} tareas pendientes (el nuevo jefe las manejará)")
         
         logging.info("✓ Tareas de jefe Router detenidas")
+
+    def _network_reunification_loop(self):
+        """
+        Loop periódico que busca otros routers en la red para detectar
+        y reunificar particiones de red.
+        
+        Solo se ejecuta cuando el nodo es jefe.
+        """
+        logging.info("🔄 Iniciando hilo de reunificación de red...")
+        check_interval = 30  # Revisar cada 30 segundos
+        
+        while self.running and self.i_am_boss:
+            try:
+                time.sleep(check_interval)
+                
+                if not self.i_am_boss:
+                    logging.info("Ya no soy jefe, deteniendo reunificación")
+                    break
+                
+                # Descubrir routers en la red
+                discovered_ips = self.discover_nodes(self.node_type, self.port)
+                
+                if not discovered_ips:
+                    continue
+                
+                # Obtener IPs de subordinados actuales
+                subordinate_ips = set()
+                with self.subordinates_lock:
+                    for conn in self.subordinates.values():
+                        subordinate_ips.add(conn.ip)
+                
+                # Filtrar routers desconocidos (no soy yo, no son subordinados)
+                unknown_routers = [ip for ip in discovered_ips 
+                                  if ip != self.ip and ip not in subordinate_ips]
+                
+                if unknown_routers:
+                    logging.info(f"🔍 Detectados {len(unknown_routers)} router(s) desconocido(s): {unknown_routers}")
+                    
+                    for router_ip in unknown_routers:
+                        self._check_router_status(router_ip)
+                
+            except Exception as e:
+                logging.error(f"Error en loop de reunificación: {e}")
+                time.sleep(5)
+        
+        logging.info("🔄 Hilo de reunificación detenido")
+    
+    def _check_router_status(self, router_ip):
+        """
+        Verifica si un router desconocido es jefe o subordinado.
+        
+        Args:
+            router_ip: IP del router a verificar
+        """
+        try:
+            logging.info(f"🔍 Verificando estado del router {router_ip}...")
+            
+            # Enviar mensaje LEADER_QUERY
+            query_message = self._create_message(
+                MessageProtocol.MESSAGE_TYPES['LEADER_QUERY'],
+                {
+                    'query_from': self.ip,
+                    'query_from_is_boss': True
+                }
+            )
+            
+            response = self.send_temporary_message(
+                router_ip,
+                self.port,
+                query_message,
+                timeout=2
+            )
+            
+            if response:
+                data = response.get('data', {})
+                is_boss = data.get('is_boss', False)
+                boss_ip = data.get('boss_ip')
+                
+                if is_boss:
+                    logging.warning(f"⚠️  Router {router_ip} también es JEFE - Partición de red detectada!")
+                    logging.info(f"Mi IP: {self.ip}, Su IP: {router_ip}")
+                elif boss_ip:
+                    logging.info(f"Router {router_ip} es subordinado (jefe: {boss_ip})")
+                else:
+                    logging.warning(f"Router {router_ip} respondió sin información de jefe")
+            else:
+                logging.debug(f"Router {router_ip} no respondió a LEADER_QUERY")
+                
+        except Exception as e:
+            logging.error(f"Error verificando router {router_ip}: {e}")
+
+    def _handle_leader_query(self, sock, client_ip, message):
+        """
+        Handler para mensaje LEADER_QUERY de otro router.
+        Responde con información sobre mi estado (jefe/subordinado).
+        
+        Args:
+            sock: Socket temporal
+            client_ip: IP del router que consulta
+            message: Mensaje con la consulta
+        """
+        data = message.get('data', {})
+        query_from_is_boss = data.get('query_from_is_boss', False)
+        
+        logging.info(f"📩 LEADER_QUERY recibido de {client_ip} (es_jefe={query_from_is_boss})")
+        
+        if self.i_am_boss:
+            # Soy jefe también - CONFLICTO DE PARTICIÓN
+            logging.warning(f"⚠️  PARTICIÓN DETECTADA: Ambos somos jefes ({self.ip} y {client_ip})")
+            
+            # Comparar IPs para resolver conflicto (algoritmo Bully)
+            if self.ip > client_ip:
+                # Mi IP es mayor, YO mantengo jefatura
+                logging.info(f"✓ Mi IP ({self.ip}) > Su IP ({client_ip}). Mantengo jefatura.")
+                
+                # Responder que soy jefe y que él debe ser subordinado
+                response = self._create_message(
+                    MessageProtocol.MESSAGE_TYPES['LEADER_RESPONSE'],
+                    {
+                        'is_boss': True,
+                        'you_should_be_subordinate': True,
+                        'boss_ip': self.ip
+                    }
+                )
+                
+                # Esperar a que él se conecte como subordinado
+                logging.info(f"Esperando conexión de subordinado desde {client_ip}...")
+                
+            else:
+                # Su IP es mayor, ÉL debe ser jefe
+                logging.warning(f"⚠️  Su IP ({client_ip}) > Mi IP ({self.ip}). Debo ceder jefatura.")
+                
+                # Responder que soy jefe pero reconozco su superioridad
+                response = self._create_message(
+                    MessageProtocol.MESSAGE_TYPES['LEADER_RESPONSE'],
+                    {
+                        'is_boss': True,
+                        'i_will_demote': True,
+                        'my_ip': self.ip
+                    }
+                )
+                
+                # Ceder jefatura y notificar subordinados
+                threading.Thread(
+                    target=self._demote_and_reunify,
+                    args=(client_ip,),
+                    daemon=True
+                ).start()
+        else:
+            # Soy subordinado, informo quién es mi jefe
+            boss_ip = None
+            if self.boss_connection and self.boss_connection.is_connected():
+                boss_ip = self.boss_connection.ip
+            
+            logging.info(f"Soy subordinado. Mi jefe es: {boss_ip or 'desconocido'}")
+            
+            response = self._create_message(
+                MessageProtocol.MESSAGE_TYPES['LEADER_RESPONSE'],
+                {
+                    'is_boss': False,
+                    'boss_ip': boss_ip
+                }
+            )
+        
+        # Enviar respuesta
+        try:
+            response_bytes = json.dumps(response).encode()
+            sock.sendall(len(response_bytes).to_bytes(2, 'big'))
+            sock.sendall(response_bytes)
+            logging.debug(f"LEADER_RESPONSE enviado a {client_ip}")
+        except Exception as e:
+            logging.error(f"Error enviando LEADER_RESPONSE a {client_ip}: {e}")
+    
+    def _demote_and_reunify(self, new_boss_ip):
+        """
+        Cede el rol de jefe, notifica a subordinados del nuevo jefe,
+        y se conecta como subordinado al nuevo jefe.
+        
+        Args:
+            new_boss_ip: IP del nuevo jefe
+        """
+        logging.info(f"🔄 Iniciando proceso de cesión de jefatura a {new_boss_ip}...")
+        
+        # 1. Notificar a todos los subordinados sobre el nuevo jefe
+        subordinate_ips = []
+        with self.subordinates_lock:
+            for conn in list(self.subordinates.values()):
+                subordinate_ips.append(conn.ip)
+        
+        logging.info(f"Notificando a {len(subordinate_ips)} subordinado(s) sobre nuevo jefe {new_boss_ip}")
+        
+        for sub_ip in subordinate_ips:
+            try:
+                # Enviar mensaje con IP del nuevo jefe
+                new_boss_msg = self._create_message(
+                    MessageProtocol.MESSAGE_TYPES['NEW_BOSS'],
+                    {
+                        'boss_ip': new_boss_ip,
+                        'boss_port': self.port  # Mismo puerto que yo
+                    }
+                )
+                
+                # Intentar enviarlo por la conexión persistente
+                with self.subordinates_lock:
+                    if sub_ip in self.subordinates:
+                        conn = self.subordinates[sub_ip]
+                        if conn.is_connected():
+                            conn.send_message(new_boss_msg)
+                            logging.info(f"✓ Subordinado {sub_ip} notificado del nuevo jefe")
+                        
+            except Exception as e:
+                logging.error(f"Error notificando subordinado {sub_ip}: {e}")
+        
+        # 2. Detener tareas de jefe
+        self.i_am_boss = False
+        self.stop_boss_tasks()
+        
+        # 3. Desconectar subordinados
+        with self.subordinates_lock:
+            for conn in list(self.subordinates.values()):
+                try:
+                    conn.disconnect()
+                except:
+                    pass
+            self.subordinates.clear()
+        
+        logging.info("Subordinados desconectados y tareas de jefe detenidas")
+        
+        # 4. Conectarse al nuevo jefe
+        time.sleep(2)  # Dar tiempo a que el nuevo jefe esté listo
+        
+        logging.info(f"Conectando al nuevo jefe {new_boss_ip}:{self.port}...")
+        
+        # Enviar identificación temporal
+        identification = self._create_message(
+            MessageProtocol.MESSAGE_TYPES['IDENTIFICATION'],
+            {
+                'node_port': self.port,
+                'is_boss': False
+            }
+        )
+        
+        response = self.send_temporary_message(
+            new_boss_ip,
+            self.port,
+            identification,
+            timeout=5
+        )
+        
+        if response and response.get('data', {}).get('is_boss'):
+            logging.info(f"✓ Nuevo jefe {new_boss_ip} confirmado")
+            
+            # Establecer conexión persistente
+            self.boss_connection = NodeConnection(
+                self.node_type,
+                new_boss_ip,
+                self.port,
+                on_message_callback=self._handle_message_from_node,
+                sender_node_type=self.node_type,
+                sender_id=self.node_id
+            )
+            
+            if self.boss_connection.connect():
+                logging.info(f"✓ Conexión persistente con nuevo jefe {new_boss_ip} establecida")
+                
+                # Enviar identificación por conexión persistente
+                self.boss_connection.send_message(identification)
+                
+                logging.info(f"🎉 Reunificación completada - Ahora soy subordinado de {new_boss_ip}")
+            else:
+                logging.error(f"✗ No se pudo establecer conexión persistente con {new_boss_ip}")
+        else:
+            logging.error(f"✗ El nuevo jefe {new_boss_ip} no respondió correctamente")
+
+    def _handle_new_boss_persistent(self, node_connection, message):
+        """
+        Handler para mensaje NEW_BOSS recibido por conexión persistente.
+        Un jefe que está cediendo su posición notifica a sus subordinados.
+        
+        Args:
+            node_connection: Conexión persistente con el jefe anterior
+            message: Mensaje con información del nuevo jefe
+        """
+        data = message.get('data', {})
+        new_boss_ip = data.get('boss_ip')
+        new_boss_port = data.get('boss_port', self.port)
+        
+        logging.info(f"📩 NEW_BOSS recibido de {node_connection.ip}: nuevo jefe será {new_boss_ip}")
+        
+        if not new_boss_ip:
+            logging.error("Mensaje NEW_BOSS sin boss_ip")
+            return
+        
+        # Si el nuevo jefe soy yo mismo, ignorar
+        if new_boss_ip == self.ip:
+            logging.info("El nuevo jefe soy yo mismo, ignorando mensaje")
+            return
+        
+        # Desconectar del jefe anterior
+        if self.boss_connection and self.boss_connection.is_connected():
+            old_boss_ip = self.boss_connection.ip
+            logging.info(f"Desconectando del jefe anterior {old_boss_ip}")
+            try:
+                self.boss_connection.disconnect()
+            except:
+                pass
+            self.boss_connection = None
+        
+        # Conectarse al nuevo jefe en un thread separado
+        logging.info(f"Iniciando reconexión al nuevo jefe {new_boss_ip}...")
+        threading.Thread(
+            target=self._reconnect_to_new_boss,
+            args=(new_boss_ip, new_boss_port),
+            daemon=True
+        ).start()
+    
+    def _reconnect_to_new_boss(self, new_boss_ip, new_boss_port):
+        """
+        Reconecta al nuevo jefe siguiendo el protocolo estándar.
+        
+        Args:
+            new_boss_ip: IP del nuevo jefe
+            new_boss_port: Puerto del nuevo jefe
+        """
+        try:
+            # Esperar un momento para que el nuevo jefe esté listo
+            time.sleep(1)
+            
+            logging.info(f"🔄 Reconectando a nuevo jefe {new_boss_ip}:{new_boss_port}...")
+            
+            # 1. Enviar identificación temporal para confirmar que es jefe
+            identification = self._create_message(
+                MessageProtocol.MESSAGE_TYPES['IDENTIFICATION'],
+                {
+                    'node_port': self.port,
+                    'is_boss': False
+                }
+            )
+            
+            response = self.send_temporary_message(
+                new_boss_ip,
+                new_boss_port,
+                identification,
+                timeout=5
+            )
+            
+            if not response:
+                logging.error(f"✗ Nuevo jefe {new_boss_ip} no respondió a identificación temporal")
+                return
+            
+            response_data = response.get('data', {})
+            if not response_data.get('is_boss'):
+                logging.error(f"✗ {new_boss_ip} no confirmó ser jefe")
+                return
+            
+            logging.info(f"✓ Nuevo jefe {new_boss_ip} confirmado")
+            
+            # 2. Establecer conexión persistente
+            self.boss_connection = NodeConnection(
+                self.node_type,
+                new_boss_ip,
+                new_boss_port,
+                on_message_callback=self._handle_message_from_node,
+                sender_node_type=self.node_type,
+                sender_id=self.node_id
+            )
+            
+            if not self.boss_connection.connect():
+                logging.error(f"✗ No se pudo establecer conexión persistente con {new_boss_ip}")
+                self.boss_connection = None
+                return
+            
+            logging.info(f"✓ Conexión persistente con nuevo jefe {new_boss_ip} establecida")
+            
+            # 3. Enviar identificación por conexión persistente
+            self.boss_connection.send_message(identification)
+            
+            logging.info(f"🎉 Reunificación completada - Reconectado a jefe {new_boss_ip}")
+            
+        except Exception as e:
+            logging.error(f"Error reconectando a nuevo jefe {new_boss_ip}: {e}")
+            self.boss_connection = None
 
     def _handle_list_tables_request(self, node_connection, message):
         """
