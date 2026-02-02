@@ -628,17 +628,20 @@ class RouterNode(Node):
         logging.info(f"✓ BD_QUERY enviada a BD para task {task_id}, URL: {url}")
     
     def _connect_to_external_bosses(self):
-        """Conecta con los jefes de BD y Scrapper"""
-        logging.info("Conectando con jefes externos (BD y Scrapper)...")
+        """Conecta con los jefes de BD y Scrapper - ROUTER VERSION (búsqueda activa)"""
+        logging.info("🔍 Router iniciando búsqueda activa de jefes externos (BD y Scrapper)...")
+        logging.info(f"external_bosses disponibles: {list(self.external_bosses.keys())}")
         
         for node_type in self.external_bosses.keys():
-            logging.info(f"Iniciando thread de búsqueda periódica para jefe {node_type}")
+            logging.info(f"⚙️ Iniciando thread de búsqueda periódica para jefe {node_type}")
             threading.Thread(
                 target=self._periodic_boss_search,
                 args=(node_type,),
                 daemon=True,
                 name=f"boss-search-{node_type}"
             ).start()
+        
+        logging.info(f"✓ {len(self.external_bosses)} threads de búsqueda iniciados")
         # # Iniciar búsqueda periódica para BD
         # threading.Thread(
         #     target=self._periodic_boss_search,
@@ -799,6 +802,10 @@ class RouterNode(Node):
                 boss_profile.set_connection(new_connection)
                 logging.info(f"✓ Conexión con jefe {node_type} establecida exitosamente")
                 
+                # Enviar información de OTROS jefes externos que conocemos
+                # Esto permite que todos los jefes conozcan las IPs de todos los demás
+                self._send_other_bosses_info(node_type, new_connection)
+                
                 # Iniciar heartbeats
                 # threading.Thread(
                 #     target=self._heartbeat_loop,
@@ -814,6 +821,67 @@ class RouterNode(Node):
             logging.error(f"No se pudo conectar con jefe {node_type} en {boss_ip}")
             boss_profile.clear_connection()
     
+    def _send_other_bosses_info(self, target_node_type, connection):
+        """
+        Intercambia información de jefes entre todos los jefes conectados.
+        
+        Cuando un nuevo jefe se conecta:
+        1. Le envía info de TODOS los otros jefes al nuevo jefe
+        2. Notifica a TODOS los otros jefes sobre el nuevo jefe
+        
+        Args:
+            target_node_type: Tipo del nuevo jefe que acaba de conectarse ('bd' o 'scrapper')
+            connection: NodeConnection con el nuevo jefe
+        """
+        # PASO 1: Enviar al NUEVO jefe la info de TODOS los OTROS jefes existentes
+        other_bosses_for_new = {}
+        
+        for boss_type, boss_profile in self.external_bosses.items():
+            # Solo incluir jefes que NO sean el nuevo y que estén conectados
+            if boss_type != target_node_type and boss_profile.is_connected():
+                other_bosses_for_new[boss_type] = {
+                    'ip': boss_profile.connection.ip,
+                    'port': boss_profile.port
+                }
+        
+        if other_bosses_for_new:
+            # Enviar al nuevo jefe
+            msg_to_new = self._create_message(
+                MessageProtocol.MESSAGE_TYPES['NEW_EXTERNAL_BOSS'],
+                {'bosses': other_bosses_for_new}
+            )
+            
+            if connection.send_message(msg_to_new):
+                logging.info(f"📤 Enviado a {target_node_type} info de {len(other_bosses_for_new)} jefe(s): {list(other_bosses_for_new.keys())}")
+            else:
+                logging.warning(f"No se pudo enviar info de jefes a {target_node_type}")
+        
+        # PASO 2: Notificar a TODOS los OTROS jefes sobre el NUEVO jefe
+        new_boss_info = {
+            target_node_type: {
+                'ip': connection.ip,
+                'port': self.external_bosses[target_node_type].port
+            }
+        }
+        
+        msg_about_new = self._create_message(
+            MessageProtocol.MESSAGE_TYPES['NEW_EXTERNAL_BOSS'],
+            {'bosses': new_boss_info}
+        )
+        
+        notified_count = 0
+        for boss_type, boss_profile in self.external_bosses.items():
+            # Enviar a todos EXCEPTO al nuevo jefe
+            if boss_type != target_node_type and boss_profile.is_connected():
+                if boss_profile.connection.send_message(msg_about_new):
+                    notified_count += 1
+                    logging.info(f"📤 Notificado a {boss_type} sobre nuevo jefe {target_node_type}")
+                else:
+                    logging.warning(f"No se pudo notificar a {boss_type} sobre {target_node_type}")
+        
+        if notified_count == 0 and len(other_bosses_for_new) == 0:
+            logging.debug(f"No hay otros jefes para intercambiar info con {target_node_type}")
+    
     def start_boss_tasks(self):
         """
         Tareas específicas del jefe Router.
@@ -823,7 +891,10 @@ class RouterNode(Node):
         logging.info(f"Soy el router jefe: {self.i_am_boss}")
         logging.info(f"external_bosses keys: {list(self.external_bosses.keys())}")
         
-        # Conectar con jefes externos
+        # Conectar con jefes externos (BD y Scrapper)
+        # IMPORTANTE: Se llama aquí porque cuando el router inicia directamente como jefe
+        # (sin elecciones), _initialize_boss() no se ejecuta
+        logging.info("Conectando con jefes externos (BD y Scrapper)...")
         self._connect_to_external_bosses()
         
         # Iniciar loop de procesamiento de tareas

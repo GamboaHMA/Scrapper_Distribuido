@@ -75,13 +75,14 @@ class Node:
             MessageProtocol.MESSAGE_TYPES['IDENTIFICATION']: self._handle_identification,
             MessageProtocol.MESSAGE_TYPES['STATUS_UPDATE']: self._handle_status_update,
             MessageProtocol.MESSAGE_TYPES['EXTERNAL_BOSSES_INFO']: self._handle_external_bosses_info,
+            MessageProtocol.MESSAGE_TYPES['NEW_EXTERNAL_BOSS']: self._handle_new_external_boss_persistent,
             # Agregar más manejadores según los tipos de mensaje necesarios
         }
         self.temporary_message_handler = {
             MessageProtocol.MESSAGE_TYPES['IDENTIFICATION']: self._handle_identification_incoming,
             MessageProtocol.MESSAGE_TYPES['ELECTION']: self._handle_election_message,
             MessageProtocol.MESSAGE_TYPES['NEW_BOSS']: self._handle_new_boss_message,
-            MessageProtocol.MESSAGE_TYPES['NEW_EXTERNAL_BOSS']: self._handle_new_external_boss,
+            MessageProtocol.MESSAGE_TYPES['NEW_EXTERNAL_BOSS']: self._handle_new_external_boss_temporary,
             # Agregar más manejadores temporales según sea necesario
         }
     
@@ -276,52 +277,106 @@ class Node:
             else:
                 logging.error(f"✗ No se pudo notificar a jefe externo {node_type}")
     
-    def _handle_new_external_boss(self, sock, client_ip, message):
+    def _handle_new_external_boss_persistent(self, node_connection, message_dict):
         """
-        Handler temporal para recibir notificación de nuevo jefe externo.
-        Crea una conexión persistente con el nuevo jefe.
+        Handler persistente para NEW_EXTERNAL_BOSS (ej: Router notifica a un jefe ya conectado).
+        
+        Args:
+            node_connection: Conexión persistente desde la que viene el mensaje
+            message_dict: Dict con el mensaje completo
+        """
+        sender_type = node_connection.node_type if node_connection else "desconocido"
+        logging.debug(f"📥 NEW_EXTERNAL_BOSS recibido por conexión persistente desde {sender_type}")
+        self._process_new_external_boss_info(message_dict.get('data', {}), sender_type)
+    
+    def _handle_new_external_boss_temporary(self, sock, client_ip, message):
+        """
+        Handler temporal para NEW_EXTERNAL_BOSS (ej: conexión de notificación directa).
         
         Args:
             sock: Socket temporal
-            client_ip: IP del nuevo jefe
-            message: Mensaje con info del nuevo jefe
+            client_ip: IP del remitente
+            message: Dict del mensaje
         """
-        data = message.get('data', {})
-        new_boss_ip = data.get('ip')
-        new_boss_port = data.get('port')
-        new_boss_type = data.get('node_type')
+        logging.debug(f"📥 NEW_EXTERNAL_BOSS recibido por conexión temporal desde {client_ip}")
+        self._process_new_external_boss_info(message.get('data', {}), client_ip)
+    
+    def _process_new_external_boss_info(self, data, sender_info):
+        """
+        Procesa información de nuevo(s) jefe(s) externo(s) y crea conexiones.
         
-        if not all([new_boss_ip, new_boss_port, new_boss_type]):
-            logging.warning("Mensaje NEW_EXTERNAL_BOSS con datos incompletos")
-            return
+        Args:
+            data: Dict con 'bosses' o campos legacy (ip, port, node_type)
+            sender_info: Identificador del remitente (para logs)
+        """
+        # Formato 1: Lista de jefes {'bosses': {'bd': {...}, 'scrapper': {...}}}
+        bosses_info = data.get('bosses', {})
         
-        logging.info(f"Nuevo jefe externo {new_boss_type} notificado: {new_boss_ip}:{new_boss_port}")
+        if bosses_info:
+            # Procesar múltiples jefes
+            logging.info(f"📥 Información de {len(bosses_info)} jefe(s) externo(s) recibida de {sender_info}")
+            
+            for boss_type, boss_info in bosses_info.items():
+                boss_ip = boss_info.get('ip')
+                boss_port = boss_info.get('port')
+                
+                if not boss_ip or not boss_port:
+                    logging.warning(f"Información incompleta para jefe {boss_type}")
+                    continue
+                
+                self._connect_to_external_boss(boss_type, boss_ip, boss_port)
+        else:
+            # Formato 2 (legacy): Info de un solo jefe
+            new_boss_ip = data.get('ip')
+            new_boss_port = data.get('port')
+            new_boss_type = data.get('node_type')
+            
+            if not all([new_boss_ip, new_boss_port, new_boss_type]):
+                logging.warning("Mensaje NEW_EXTERNAL_BOSS con datos incompletos")
+                return
+            
+            logging.info(f"Nuevo jefe externo {new_boss_type} notificado: {new_boss_ip}:{new_boss_port}")
+            self._connect_to_external_boss(new_boss_type, new_boss_ip, new_boss_port)
+    
+    def _connect_to_external_boss(self, boss_type, boss_ip, boss_port):
+        """
+        Conecta con un jefe externo y actualiza el cache.
         
-        # Cerrar conexión antigua con ese tipo si existe
-        if new_boss_type in self.bosses_connections:
-            old_conn = self.bosses_connections[new_boss_type]
-            logging.info(f"Cerrando conexión antigua con jefe {new_boss_type}")
-            old_conn.disconnect()
-            del self.bosses_connections[new_boss_type]
+        Args:
+            boss_type: Tipo de nodo ('bd', 'scrapper', 'router')
+            boss_ip: IP del jefe
+            boss_port: Puerto del jefe
+        """
+        # Si ya existe conexión con la misma IP, no hacer nada
+        if boss_type in self.bosses_connections:
+            existing_conn = self.bosses_connections[boss_type]
+            if existing_conn.ip == boss_ip and existing_conn.is_connected():
+                logging.debug(f"Ya existe conexión activa con jefe {boss_type} en {boss_ip}")
+                return
+            else:
+                # IP diferente o conexión muerta, cerrar la antigua
+                logging.info(f"Cerrando conexión antigua con jefe {boss_type}")
+                existing_conn.disconnect()
+                del self.bosses_connections[boss_type]
         
         # Actualizar cache
-        self.external_bosses_cache[new_boss_type] = {
-            'ip': new_boss_ip,
-            'port': new_boss_port
+        self.external_bosses_cache[boss_type] = {
+            'ip': boss_ip,
+            'port': boss_port
         }
         
         # Crear nueva conexión persistente
         conn = NodeConnection(
-            new_boss_type,
-            new_boss_ip,
-            new_boss_port,
+            boss_type,
+            boss_ip,
+            boss_port,
             on_message_callback=self._handle_message_from_node,
             sender_node_type=self.node_type,
             sender_id=self.node_id
         )
         
         if conn.connect():
-            self.bosses_connections[new_boss_type] = conn
+            self.bosses_connections[boss_type] = conn
             
             # Enviar identificación
             conn.send_message(
@@ -335,19 +390,12 @@ class Node:
                 )
             )
             
-            # Iniciar heartbeats
-            # threading.Thread(
-            #     target=self._heartbeat_loop,
-            #     args=(conn,),
-            #     daemon=True
-            # ).start()
-            
             # Replicar info a subordinados
             self.replicate_external_bosses_info()
             
-            logging.info(f"Conexión persistente con nuevo jefe externo {new_boss_type} establecida")
+            logging.info(f"✓ Conexión con jefe externo {boss_type} ({boss_ip}:{boss_port}) establecida")
         else:
-            logging.error(f"No se pudo establecer conexión con nuevo jefe externo {new_boss_type}")
+            logging.error(f"✗ No se pudo conectar con jefe externo {boss_type} en {boss_ip}:{boss_port}")
     
     def _handle_identification_incoming(self, sock, client_ip, message):
         """
@@ -834,19 +882,25 @@ class Node:
         if client_node_type in self.bosses_connections:
             existing_conn = self.bosses_connections[client_node_type]
             
-            # Si es la misma IP y la conexión está activa, no hacer nada
-            if existing_conn.ip == client_ip and existing_conn.is_connected():
-                logging.warning(f"Cliente externo {client_node_type} {client_ip} ya existe y está conectado")
-                if existing_socket:
-                    existing_socket.close()
-                return True
+            # Verificar que existing_conn no sea None
+            if existing_conn is not None:
+                # Si es la misma IP y la conexión está activa, no hacer nada
+                if existing_conn.ip == client_ip and existing_conn.is_connected():
+                    logging.warning(f"Cliente externo {client_node_type} {client_ip} ya existe y está conectado")
+                    if existing_socket:
+                        existing_socket.close()
+                    return True
+                else:
+                    # La IP cambió o la conexión está muerta, reemplazar
+                    logging.info(f"Reemplazando cliente externo {client_node_type}: {existing_conn.ip} → {client_ip}")
+                    try:
+                        existing_conn.disconnect()
+                    except:
+                        pass
             else:
-                # La IP cambió o la conexión está muerta, reemplazar
-                logging.info(f"Reemplazando cliente externo {client_node_type}: {existing_conn.ip} → {client_ip}")
-                try:
-                    existing_conn.disconnect()
-                except:
-                    pass
+                # La conexión es None, eliminar la entrada
+                logging.warning(f"Entrada None encontrada para {client_node_type}, eliminando...")
+                del self.bosses_connections[client_node_type]
         
         # Crear NodeConnection hacia el cliente (aunque sea el cliente quien inició)
         conn = NodeConnection(
@@ -1118,7 +1172,7 @@ class Node:
                     boss_ip = conn.ip
                     logging.warning(f"Jefe {node_type} desconectado")
                     conn.disconnect()
-                    self.bosses_connections[node_type] = None
+                    del self.bosses_connections[node_type]
                     # Eliminar de known_nodes
                     self.remove_node_from_registry(node_type, boss_ip)
                     logging.info(f"Conexión con jefe de {node_type} cerrada")
@@ -1338,7 +1392,7 @@ class Node:
             logging.warning(f"Timeout esperando mensaje de {client_ip}")
             sock.close()
         except Exception as e:
-            logging.error(f"Error manejando conexión entrante de {client_ip}: {e}")
+            logging.error(f"Error manejando conexión entrante de {client_ip}: {e}", exc_info=True)
             sock.close()  
     
     def add_persistent_message_handler(self, msg_type, handler_func):
