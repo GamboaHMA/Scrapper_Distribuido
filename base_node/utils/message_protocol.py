@@ -60,7 +60,9 @@ class MessageProtocol:
         'LIST_TABLES': 'list_tables',  # Solicitar lista de tablas disponibles
         'LIST_TABLES_RESPONSE': 'list_tables_response',  # Respuesta con lista de tablas
         'GET_TABLE_DATA': 'get_table_data',  # Solicitar datos paginados de una tabla
-        'GET_TABLE_DATA_RESPONSE': 'get_table_data_response'  # Respuesta con datos paginados
+        'GET_TABLE_DATA_RESPONSE': 'get_table_data_response',  # Respuesta con datos paginados
+        'EXPORT_ALL_DATA': 'export_all_data',  # Solicitar exportación de todos los datos
+        'EXPORT_ALL_DATA_RESPONSE': 'export_all_data_response'  # Respuesta con todos los datos
     }
 
     @staticmethod

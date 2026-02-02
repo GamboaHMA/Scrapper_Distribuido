@@ -158,12 +158,20 @@ class RouterNode(Node):
             self._handle_get_table_data_request
         )
         self.add_persistent_message_handler(
+            MessageProtocol.MESSAGE_TYPES['EXPORT_ALL_DATA'],
+            self._handle_export_all_data_request
+        )
+        self.add_persistent_message_handler(
             MessageProtocol.MESSAGE_TYPES['LIST_TABLES_RESPONSE'],
             self._handle_list_tables_response
         )
         self.add_persistent_message_handler(
             MessageProtocol.MESSAGE_TYPES['GET_TABLE_DATA_RESPONSE'],
             self._handle_get_table_data_response
+        )
+        self.add_persistent_message_handler(
+            MessageProtocol.MESSAGE_TYPES['EXPORT_ALL_DATA_RESPONSE'],
+            self._handle_export_all_data_response
         )
         
         # Handler temporal para BD_QUERY_RESPONSE desde subordinados BD (socket temporal)
@@ -1073,6 +1081,99 @@ class RouterNode(Node):
         client_connection.send_message(message)
         table_name = data.get('table_name', 'unknown')
         logging.info(f"Datos de tabla '{table_name}' enviados a {client_connection.node_id}")
+    
+    def _handle_export_all_data_request(self, node_connection, message):
+        """
+        Handler para solicitud de exportación de todos los datos.
+        Reenvía la petición a la BD y guarda referencia del cliente.
+        
+        Args:
+            node_connection: Conexión con el cliente web
+            message: Mensaje con la solicitud
+        """
+        data = message.get('data', {})
+        request_id = data.get('request_id')
+        
+        logging.info(f"Solicitud de exportación de datos recibida de {node_connection.node_id} (request_id={request_id})")
+        
+        # Verificar que BD esté disponible
+        bd_profile = self.external_bosses.get('bd')
+        if not bd_profile or not bd_profile.is_connected():
+            logging.error("BD no disponible para exportación")
+            error_response = {
+                'type': MessageProtocol.MESSAGE_TYPES['EXPORT_ALL_DATA_RESPONSE'],
+                'sender_id': self.node_id,
+                'timestamp': datetime.now().isoformat(),
+                'data': {
+                    'request_id': request_id,
+                    'success': False,
+                    'error': 'BD no disponible'
+                }
+            }
+            node_connection.send_message(error_response)
+            return
+        
+        # Guardar referencia del cliente para cuando llegue la respuesta
+        if not hasattr(self, '_pending_db_requests'):
+            self._pending_db_requests = {}
+        self._pending_db_requests[request_id] = node_connection
+        
+        # Reenviar petición a BD
+        bd_message = {
+            'type': MessageProtocol.MESSAGE_TYPES['EXPORT_ALL_DATA'],
+            'sender_id': self.node_id,
+            'timestamp': datetime.now().isoformat(),
+            'data': {
+                'request_id': request_id
+            }
+        }
+        
+        success = bd_profile.connection.send_message(bd_message)
+        
+        if success:
+            logging.info(f"Solicitud de exportación reenviada a BD jefe")
+        else:
+            logging.error("Error reenviando solicitud de exportación a BD")
+            # Limpiar referencia
+            self._pending_db_requests.pop(request_id, None)
+            # Enviar error al cliente
+            error_response = {
+                'type': MessageProtocol.MESSAGE_TYPES['EXPORT_ALL_DATA_RESPONSE'],
+                'sender_id': self.node_id,
+                'timestamp': datetime.now().isoformat(),
+                'data': {
+                    'request_id': request_id,
+                    'success': False,
+                    'error': 'Error comunicando con BD'
+                }
+            }
+            node_connection.send_message(error_response)
+    
+    def _handle_export_all_data_response(self, node_connection, message):
+        """
+        Handler para respuesta de exportación desde BD.
+        Reenvía la respuesta al cliente que la solicitó.
+        
+        Args:
+            node_connection: Conexión con BD
+            message: Mensaje con la respuesta (puede ser muy grande)
+        """
+        data = message.get('data', {})
+        request_id = data.get('request_id')
+        
+        if not hasattr(self, '_pending_db_requests'):
+            logging.warning("No hay peticiones pendientes de BD")
+            return
+        
+        client_connection = self._pending_db_requests.pop(request_id, None)
+        if not client_connection:
+            logging.warning(f"No se encontró cliente para request_id {request_id}")
+            return
+        
+        # Reenviar respuesta al cliente
+        client_connection.send_message(message)
+        urls_count = len(data.get('data', {}).get('urls', []))
+        logging.info(f"Exportación de datos ({urls_count} URLs) enviada a {client_connection.node_id}")
 
 
 if __name__ == "__main__":

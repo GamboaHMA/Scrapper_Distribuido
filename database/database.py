@@ -1408,6 +1408,12 @@ class DatabaseNode(Node):
             self._handle_get_table_data
         )
         
+        # Handler para exportar todos los datos
+        self.add_persistent_message_handler(
+            MessageProtocol.MESSAGE_TYPES['EXPORT_ALL_DATA'],
+            self._handle_export_all_data
+        )
+        
         # Handler para actualizar contenido de URL (consolidación)
         self.add_persistent_message_handler(
             MessageProtocol.MESSAGE_TYPES['UPDATE_URL_CONTENT'],
@@ -2260,6 +2266,76 @@ class DatabaseNode(Node):
             logging.error(f"Error obteniendo datos de tabla {table_name}: {e}")
             response = {
                 'type': MessageProtocol.MESSAGE_TYPES['GET_TABLE_DATA_RESPONSE'],
+                'sender_id': self.node_id,
+                'timestamp': datetime.now().isoformat(),
+                'data': {
+                    'request_id': request_id,
+                    'success': False,
+                    'error': str(e)
+                }
+            }
+            node_connection.send_message(response)
+    
+    def _handle_export_all_data(self, node_connection, message):
+        """
+        Handler para exportar todos los datos almacenados en BD.
+        Retorna todas las URLs con su información extraída.
+        
+        Args:
+            node_connection: Conexión con el cliente (a través de router)
+            message: Mensaje con la solicitud {request_id}
+        """
+        data = message.get('data', {})
+        request_id = data.get('request_id')
+        
+        logging.info(f"Exportando todos los datos para {node_connection.node_id}")
+        
+        try:
+            cursor = self.db_conn.cursor()
+            
+            # Obtener todas las URLs con su información
+            cursor.execute("""
+                SELECT url, content, firstseen, scrapped_at, current_replicas, target_replicas
+                FROM urls
+                ORDER BY firstseen DESC
+            """)
+            rows = cursor.fetchall()
+            
+            # Convertir a lista de diccionarios
+            urls_data = []
+            for row in rows:
+                urls_data.append({
+                    'url': row[0],
+                    'content': row[1],
+                    'firstseen': row[2],
+                    'scrapped_at': row[3],
+                    'current_replicas': row[4],
+                    'target_replicas': row[5]
+                })
+            
+            # Enviar respuesta con todos los datos
+            response = {
+                'type': MessageProtocol.MESSAGE_TYPES['EXPORT_ALL_DATA_RESPONSE'],
+                'sender_id': self.node_id,
+                'timestamp': datetime.now().isoformat(),
+                'data': {
+                    'request_id': request_id,
+                    'success': True,
+                    'data': {
+                        'urls': urls_data,
+                        'total_count': len(urls_data),
+                        'export_date': datetime.now().isoformat()
+                    }
+                }
+            }
+            
+            node_connection.send_message(response)
+            logging.info(f"✓ Exportación completada: {len(urls_data)} URLs enviadas a {node_connection.node_id}")
+            
+        except Exception as e:
+            logging.error(f"Error exportando datos: {e}")
+            response = {
+                'type': MessageProtocol.MESSAGE_TYPES['EXPORT_ALL_DATA_RESPONSE'],
                 'sender_id': self.node_id,
                 'timestamp': datetime.now().isoformat(),
                 'data': {
