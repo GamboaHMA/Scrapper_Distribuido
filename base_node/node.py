@@ -9,6 +9,7 @@ from datetime import datetime
 import struct
 import queue
 import sys
+import ssl
 
 # Agregar el directorio padre al path para imports absolutos
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -29,7 +30,7 @@ logging.basicConfig(
 )
 
 class Node:
-    def __init__(self, node_type):
+    def __init__(self, node_type, use_tls=False, tls_certfile=None, tls_keyfile=None, tls_cafile=None, require_client_cert=False):
         self.node_type = node_type
         self.ip = socket.gethostbyname(socket.gethostname())
         self.port = PORTS.get(self.node_type)
@@ -85,6 +86,15 @@ class Node:
             MessageProtocol.MESSAGE_TYPES['NEW_EXTERNAL_BOSS']: self._handle_new_external_boss_temporary,
             # Agregar más manejadores temporales según sea necesario
         }
+                # TLS configuration (provided by caller)
+        self.use_tls = bool(use_tls)
+        self.tls_certfile = tls_certfile
+        self.tls_keyfile = tls_keyfile
+        self.tls_cafile = tls_cafile
+        self.require_client_cert = bool(require_client_cert)
+        self.ssl_server_context = None
+        self.ssl_client_context = None
+
     
     @property
     def boss_connection(self):
@@ -372,7 +382,11 @@ class Node:
             boss_port,
             on_message_callback=self._handle_message_from_node,
             sender_node_type=self.node_type,
-            sender_id=self.node_id
+            sender_id=self.node_id,
+            use_tls=self.use_tls,
+            tls_cafile=self.tls_cafile,
+            tls_certfile=self.tls_certfile,
+            tls_keyfile=self.tls_keyfile
         )
         
         if conn.connect():
@@ -606,7 +620,11 @@ class Node:
                 port=boss_port,
                 on_message_callback=self._handle_message_from_node,
                 sender_node_type=self.node_type,
-                sender_id=self.node_id
+                sender_id=self.node_id,
+                use_tls=self.use_tls,
+                tls_cafile=self.tls_cafile,
+                tls_certfile=self.tls_certfile,
+                tls_keyfile=self.tls_keyfile
             )
             
             # Conectar usando el socket existente
@@ -713,7 +731,11 @@ class Node:
             self.port,
             on_message_callback=self._handle_message_from_node,
             sender_node_type=self.node_type,
-            sender_id=self.node_id
+            sender_id=self.node_id,
+            use_tls=self.use_tls,
+            tls_cafile=self.tls_cafile,
+            tls_certfile=self.tls_certfile,
+            tls_keyfile=self.tls_keyfile
         )
         
         if new_connection.connect():
@@ -805,7 +827,11 @@ class Node:
             self.port,
             on_message_callback=self._handle_message_from_node,
             sender_node_type=self.node_type,
-            sender_id=self.node_id
+            sender_id=self.node_id,
+            use_tls=self.use_tls,
+            tls_cafile=self.tls_cafile,
+            tls_certfile=self.tls_certfile,
+            tls_keyfile=self.tls_keyfile
         )
         
         if conn.connect(existing_socket=existing_socket):
@@ -909,7 +935,11 @@ class Node:
             client_port,  # Puerto correcto del cliente
             on_message_callback=self._handle_message_from_node,
             sender_node_type=self.node_type,  # Mi tipo
-            sender_id=self.node_id  # Mi ID
+            sender_id=self.node_id,  # Mi ID
+            use_tls=self.use_tls,
+            tls_cafile=self.tls_cafile,
+            tls_certfile=self.tls_certfile,
+            tls_keyfile=self.tls_keyfile
         )
         
         if conn.connect(existing_socket=existing_socket):
@@ -986,44 +1016,94 @@ class Node:
             - Si falla la conexión y node_type está especificado, el nodo se elimina de known_nodes
         """
         temp_sock = None
+        ssock = None
         try:
-            # Crear y configurar socket
+            # Crear socket base
             temp_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             temp_sock.settimeout(timeout)
-            
-            # Conectar
-            temp_sock.connect((target_ip, target_port))
-            
-            # Serializar y enviar mensaje
+
+            # Si no usamos TLS, hacer conexión simple
+            if not self.use_tls:
+                temp_sock.connect((target_ip, target_port))
+
+                message_bytes = json.dumps(message_dict).encode()
+                message_length = len(message_bytes)
+
+                temp_sock.sendall(message_length.to_bytes(2, 'big'))
+                temp_sock.sendall(message_bytes)
+
+                logging.debug(f"Mensaje temporal (plain) enviado a {target_ip}:{target_port} - tipo: {message_dict.get('type', 'unknown')}")
+
+                if expect_response:
+                    length_bytes = temp_sock.recv(2)
+                    if not length_bytes:
+                        logging.debug(f"No se recibió respuesta de {target_ip}:{target_port}")
+                        return None
+                    response_length = int.from_bytes(length_bytes, 'big')
+                    response_bytes = b''
+                    while len(response_bytes) < response_length:
+                        chunk = temp_sock.recv(response_length - len(response_bytes))
+                        if not chunk:
+                            logging.debug(f"Conexión cerrada por {target_ip}:{target_port} durante recepción")
+                            return None
+                        response_bytes += chunk
+                    return json.loads(response_bytes.decode())
+                return True
+
+            # Si usamos TLS, preparar contexto cliente correctamente
+            context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
+
+            # Verificar CA si fue proporcionada
+            if self.tls_cafile:
+                try:
+                    context.load_verify_locations(cafile=self.tls_cafile)
+                    context.check_hostname = False  # usamos IPs
+                    context.verify_mode = ssl.CERT_REQUIRED
+                    logging.debug(f"CA cargada para verificación: {self.tls_cafile}")
+                except Exception as e:
+                    logging.warning(f"No se pudo cargar tls_cafile '{self.tls_cafile}': {e} — se usará verify_mode=NONE")
+                    context.check_hostname = False
+                    context.verify_mode = ssl.CERT_NONE
+            else:
+                # Entorno sin CA (desarrollo): no verificar
+                context.check_hostname = False
+                context.verify_mode = ssl.CERT_NONE
+                logging.warning("No se proporcionó tls_cafile: desactivando verificación de certificado (solo para desarrollo)")
+
+            # Si se dispone de certificado y clave cliente, usarlos
+            if self.tls_certfile and self.tls_keyfile:
+                try:
+                    context.load_cert_chain(certfile=self.tls_certfile, keyfile=self.tls_keyfile)
+                except Exception as e:
+                    logging.warning(f"No se pudo cargar cert/key cliente: {e}")
+
+            # Envolver socket y conectar
+            ssock = context.wrap_socket(temp_sock, server_hostname=None)
+            ssock.settimeout(timeout)
+            logging.info(f"Intentando conectar a {target_ip}:{target_port} (TLS)")
+            ssock.connect((target_ip, target_port))
+
+            # Enviar datos por la socket TLS (ssock)
             message_bytes = json.dumps(message_dict).encode()
             message_length = len(message_bytes)
-            
-            # Enviar longitud (2 bytes) + mensaje (usando sendall para asegurar envío completo)
-            temp_sock.sendall(message_length.to_bytes(2, 'big'))
-            temp_sock.sendall(message_bytes)
-            
-            logging.debug(f"Mensaje temporal enviado a {target_ip}:{target_port} - tipo: {message_dict.get('type', 'unknown')}")
-            
-            # Si se espera respuesta, recibirla
+            ssock.sendall(message_length.to_bytes(2, 'big'))
+            ssock.sendall(message_bytes)
+
+            logging.debug(f"Mensaje temporal (TLS) enviado a {target_ip}:{target_port} - tipo: {message_dict.get('type', 'unknown')}")
+
             if expect_response:
-                # Recibir longitud de respuesta (2 bytes)
-                length_bytes = temp_sock.recv(2)
-                
+                length_bytes = ssock.recv(2)
                 if not length_bytes:
                     logging.debug(f"No se recibió respuesta de {target_ip}:{target_port}")
                     return None
-                
                 response_length = int.from_bytes(length_bytes, 'big')
-                
-                # Recibir respuesta completa
                 response_bytes = b''
                 while len(response_bytes) < response_length:
-                    chunk = temp_sock.recv(response_length - len(response_bytes))
+                    chunk = ssock.recv(response_length - len(response_bytes))
                     if not chunk:
                         logging.debug(f"Conexión cerrada por {target_ip}:{target_port} durante recepción")
                         return None
                     response_bytes += chunk
-                
                 # Decodificar respuesta
                 response_dict = json.loads(response_bytes.decode())
                 logging.debug(f"Respuesta recibida de {target_ip}:{target_port} - tipo: {response_dict.get('type', 'unknown')}")
@@ -1064,29 +1144,18 @@ class Node:
         
         finally:
             # Siempre cerrar el socket
-            if temp_sock:
+            # Cerrar la socket TLS (ssock) si existe, sino cerrar temp_sock
+            if ssock:
+                try:
+                    ssock.close()
+                except:
+                    pass
+            elif temp_sock:
                 try:
                     temp_sock.close()
                 except:
-                    pass
+                    pass    
     
-    # def _heartbeat_monitor_loop(self):
-    #     """
-    #     Hilo que monitorea los heartbeats de todas las conexiones.
-    #     Si un nodo no ha enviado heartbeat en heartbeat_timeout segundos,
-    #     se considera muerto y se desconecta.
-    #     """
-    #     logging.info(f"Iniciando monitor de heartbeats (timeout: {self.heartbeat_timeout}s, check interval: {self.heartbeat_check_interval}s)")
-        
-    #     while self.running:
-    #         try:
-    #             time.sleep(self.heartbeat_check_interval)
-                
-    #             # Limpiar nodos muertos
-    #             self._cleanup_dead_nodes()
-                
-    #         except Exception as e:
-    #             logging.error(f"Error en monitor de heartbeats: {e}")
     
     def _connection_monitor_loop(self):
         """
@@ -1301,20 +1370,50 @@ class Node:
             return
         
         try:
-            self.listen_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.listen_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            self.listen_socket.bind((self.ip, self.port))
-            self.listen_socket.listen(10)
-            
+            # Preparar contexto SSL para el servidor y almacenarlo en la instancia
+            context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            cert_path = self.tls_certfile
+            key_path = self.tls_keyfile
+
+            if not cert_path or not key_path:
+                raise ValueError("Faltan tls_certfile o tls_keyfile para iniciar el servidor TLS")
+
+            context.load_cert_chain(certfile=cert_path, keyfile=key_path)
+
+            # Si se requiere verificación del certificado cliente y se proveyó una CA, configurarla
+            if self.require_client_cert:
+                if self.tls_cafile:
+                    context.load_verify_locations(cafile=self.tls_cafile)
+                    context.verify_mode = ssl.CERT_REQUIRED
+                    logging.info("Servidor TLS configurado para requerir certificado cliente (CA cargada)")
+                else:
+                    # No hay CA, no se puede requerir verificación de cliente
+                    context.verify_mode = ssl.CERT_OPTIONAL
+                    logging.warning("require_client_cert=True pero no se proporcionó tls_cafile: se usará CERT_OPTIONAL")
+            else:
+                # No requerir certificado cliente por defecto
+                context.verify_mode = ssl.CERT_NONE
+
+            self.ssl_server_context = context
+
+            # Crear socket normal (no envuelto). Envolvemos cada conexión entrante individualmente
+            listen_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            listen_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            listen_socket.bind((self.ip, self.port))
+            listen_socket.listen(10)
+
+            self.listen_socket = listen_socket
+            logging.info(f"Socket de escucha iniciado en {self.ip}:{self.port} (TLS listo)")
+
             # Iniciar hilo de escucha
             self.listen_thread = threading.Thread(
                 target=self._listen_for_connections,
                 daemon=True
             )
             self.listen_thread.start()
-            
+
             logging.info(f"Escuchando conexiones en {self.ip}:{self.port}")
-            
+
         except Exception as e:
             logging.error(f"Error iniciando socket de escucha: {e}")
             self.listen_socket = None
@@ -1325,14 +1424,74 @@ class Node:
             try:
                 self.listen_socket.settimeout(1.0)
                 client_sock, client_addr = self.listen_socket.accept()
-                logging.info(f"Conexión entrante desde {client_addr[0]}")
-                
-                # Procesar en hilo separado
-                threading.Thread(
-                    target=self._handle_incoming_connection,
-                    args=(client_sock, client_addr),
-                    daemon=True
-                ).start()
+                client_ip = client_addr[0]
+                logging.info(f"Conexión entrante desde {client_ip}")
+
+                # Si configuramos SSL para el servidor, envolver el socket y hacer handshake
+                if self.use_tls and self.ssl_server_context:
+                    # Intentar inspeccionar el primer byte para distinguir entre
+                    # una conexión TLS (ClientHello empieza con 0x16) y una
+                    # conexión plain (ej. JSON empezando con '{' = 0x7b).
+                    try:
+                        client_sock.settimeout(0.5)
+                        try:
+                            first = client_sock.recv(1, socket.MSG_PEEK)
+                        except (BlockingIOError, InterruptedError):
+                            first = b''
+                        except Exception as e:
+                            # Si falló el peek, seguir con el flujo normal e intentar handshake
+                            first = b''
+
+                        # byte 0x16 indica TLS Handshake (ClientHello)
+                        if first and first[0] == 0x16:
+                            try:
+                                ssl_sock = self.ssl_server_context.wrap_socket(client_sock, server_side=True, do_handshake_on_connect=False)
+                                ssl_sock.settimeout(5.0)
+                                ssl_sock.do_handshake()
+                                logging.debug(f"Handshake TLS exitoso con {client_ip}")
+                                wrapped = ssl_sock
+                            except ssl.SSLError as e:
+                                logging.error(f"Error aceptando conexión TLS desde {client_ip}: {e}")
+                                try:
+                                    client_sock.close()
+                                except:
+                                    pass
+                                continue
+                            except Exception as e:
+                                logging.error(f"Error durante handshake TLS con {client_ip}: {e}")
+                                try:
+                                    client_sock.close()
+                                except:
+                                    pass
+                                continue
+
+                            # Procesar en hilo separado con socket TLS
+                            threading.Thread(
+                                target=self._handle_incoming_connection,
+                                args=(wrapped, client_addr),
+                                daemon=True
+                            ).start()
+                        else:
+                            # No parece TLS: procesar como conexión plain
+                            logging.debug(f"Primera byte de conexión desde {client_ip}: {first.hex() if first else 'empty'} (tratando como plain)")
+                            threading.Thread(
+                                target=self._handle_incoming_connection,
+                                args=(client_sock, client_addr),
+                                daemon=True
+                            ).start()
+                    finally:
+                        # Restaurar timeout del socket de escucha si fue cambiado
+                        try:
+                            client_sock.settimeout(None)
+                        except:
+                            pass
+                else:
+                    # No TLS: procesar directamente
+                    threading.Thread(
+                        target=self._handle_incoming_connection,
+                        args=(client_sock, client_addr),
+                        daemon=True
+                    ).start()
                 
             except socket.timeout:
                 continue
