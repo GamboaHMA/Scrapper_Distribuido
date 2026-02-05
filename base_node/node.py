@@ -72,6 +72,7 @@ class Node:
         # self.heartbeat_timeout = 40  # segundos sin heartbeat antes de considerar muerto
         # self.heartbeat_check_interval = 30  # revisar cada 30 segundos
         
+        # TODO: handler persistente para NEW_BOSS (anuncio de nuevo jefe)
         self.persistent_message_handler = {
             MessageProtocol.MESSAGE_TYPES['IDENTIFICATION']: self._handle_identification,
             MessageProtocol.MESSAGE_TYPES['STATUS_UPDATE']: self._handle_status_update,
@@ -165,13 +166,25 @@ class Node:
                 "is_boss": is_boss
             }
         
+        # TODO: Lógica de actualización de referencias según rol y tipo
         # Si soy jefe y un subordinado se identifica, ya lo tengo registrado
         # Si no soy jefe y el nodo es jefe, actualizar mi referencia
-        if not self.i_am_boss and is_boss:
-            self.my_boss_profile.set_connection(node_connection)
-            logging.info(f"Jefe {sender_node_type} identificado: {node_ip}")
-        else:
-            logging.debug(f"Identificación recibida de {sender_node_type} {node_ip} (boss={is_boss})")
+        # if sender_node_type == self.node_type:
+        #     # Mismo tipo de nodo
+        #     if self.i_am_boss and not is_boss:
+        #         # Soy jefe y es subordinado → ya lo tengo registrado
+        #         logging.debug(f"Subordinado {node_ip} identificado")
+        #     elif not self.i_am_boss and is_boss:
+        #         # Soy subordinado y es jefe → actualizar referencia
+        #         self.my_boss_profile.set_connection(node_connection)
+        #         logging.info(f"Jefe {sender_node_type} identificado: {node_ip}")
+        # else:
+        #     # Diferente tipo de nodo (jefe externo)
+        #     if not self.i_am_boss and is_boss:
+        #         self.my_boss_profile.set_connection(node_connection)
+        #         logging.info(f"Jefe {sender_node_type} identificado: {node_ip}")
+        #     else:
+        #         logging.debug(f"Identificación recibida de {sender_node_type} {node_ip} (boss={is_boss})")
     
     def _handle_status_update(self, node_connection, message_dict):
         data = message_dict.get('data', {})
@@ -303,6 +316,7 @@ class Node:
         logging.debug(f"📥 NEW_EXTERNAL_BOSS recibido por conexión temporal desde {client_ip}")
         self._process_new_external_boss_info(message.get('data', {}), client_ip)
     
+    # TODO: Quien manda este mensaje (temporal)?
     def _process_new_external_boss_info(self, data, sender_info):
         """
         Procesa información de nuevo(s) jefe(s) externo(s) y crea conexiones.
@@ -419,7 +433,7 @@ class Node:
         # Obtener el tipo de nodo del remitente (del mensaje raíz)
         sender_node_type = message.get('node_type', self.node_type)
         
-        # Registrar el nodo en known_nodes usando el tipo del remitente
+        # Registrar el nodo en nodes_cache usando el tipo del remitente
         if sender_node_type not in self.nodes_cache:
             self.nodes_cache[sender_node_type] = {}
         
@@ -505,27 +519,28 @@ class Node:
                         # Agregar como subordinado
                         success = self.add_subordinate(client_ip, existing_socket=sock)
                         
-                        if success:
-                            # Notificar a la subclase que se heredó un nuevo subordinado de un conflicto
-                            # self._on_subordinate_inherited_from_conflict(client_ip)
+                        # if success:
+                        #     # Notificar a la subclase que se heredó un nuevo subordinado de un conflicto
+                        #     # self._on_subordinate_inherited_from_conflict(client_ip)
                             
-                            # Enviarle IDENTIFICATION para que sepa que debe volverse subordinado
-                            response = self._create_message(
-                                MessageProtocol.MESSAGE_TYPES['IDENTIFICATION'],
-                                {
-                                    'node_port': self.port,
-                                    'is_boss': True,
-                                    'is_temporary': False
-                                }
-                            )
-                            try:
-                                response_bytes = json.dumps(response).encode()
-                                sock.sendall(len(response_bytes).to_bytes(2, 'big'))
-                                sock.sendall(response_bytes)
-                                logging.info(f"Notificación de jefe enviada a {client_ip}")
-                            except Exception as e:
-                                logging.error(f"Error notificando a {client_ip}: {e}")
-                        else:
+                        #     # Enviarle IDENTIFICATION para que sepa que debe volverse subordinado
+                        #     response = self._create_message(
+                        #         MessageProtocol.MESSAGE_TYPES['IDENTIFICATION'],
+                        #         {
+                        #             'node_port': self.port,
+                        #             'is_boss': True,
+                        #             'is_temporary': False
+                        #         }
+                        #     )
+                        #     try:
+                        #         response_bytes = json.dumps(response).encode()
+                        #         sock.sendall(len(response_bytes).to_bytes(2, 'big'))
+                        #         sock.sendall(response_bytes)
+                        #         logging.info(f"Notificación de jefe enviada a {client_ip}")
+                        #     except Exception as e:
+                        #         logging.error(f"Error notificando a {client_ip}: {e}")
+                        # else:
+                        if not success:
                             logging.error(f"No se pudo registrar {client_ip} como subordinado")
                             sock.close()
                     else:
@@ -561,16 +576,30 @@ class Node:
             logging.info("Tareas de jefe detenidas")
         except Exception as e:
             logging.error(f"Error deteniendo tareas de jefe: {e}")
+            
+        # 3. Enviar anuncio de nuevo jefe a todos los subordinados
+        announcement = self._create_message(
+            MessageProtocol.MESSAGE_TYPES['NEW_BOSS'],
+            {
+                'ip': new_boss_ip,
+                'port': self.port
+            }
+        )
         
-        # 3. Convertir subordinados actuales en conexiones a cerrar
         if self.subordinates:
-            logging.info(f"Desconectando {len(self.subordinates)} subordinados...")
-            for node_id, conn in list(self.subordinates.items()):
-                try:
-                    conn.disconnect()
-                except Exception as e:
-                    logging.error(f"Error desconectando subordinado {node_id}: {e}")
-            self.subordinates.clear()
+            logging.info(f"Anunciando a {len(self.subordinates)} subordinados sobre el nuevo jefe {new_boss_ip} y cerrando conexiones con ellos...")
+            with self.subordinates_lock:
+                for node_id, conn in list(self.subordinates.items()):
+                    try:
+                        conn.send_message(announcement)
+                        logging.info(f"Anuncio de nuevo jefe enviado a subordinado {node_id}")
+                    except Exception as e:
+                        logging.error(f"Error enviando anuncio a subordinado {node_id}: {e}")
+                    try:
+                        conn.disconnect()
+                    except Exception as e:
+                        logging.error(f"Error desconectando subordinado {node_id}: {e}")
+                self.subordinates.clear()                  
         
         # 4. Conectarse al nuevo jefe
         logging.info(f"Conectando al nuevo jefe en {new_boss_ip}:{self.port}...")

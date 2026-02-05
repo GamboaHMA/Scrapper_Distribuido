@@ -455,7 +455,11 @@ class ScrapperNode(Node):
         
     
     def _handle_new_task_from_router(self, node_connection, message_dict):
-        """Handler para cuando el router envía una nueva tarea (solo jefe)"""
+        """
+        Handler para cuando el router envía una nueva tarea (solo jefe).
+        IMPORTANTE: Este handler se ejecuta en el thread de recepción de mensajes,
+        por lo que NO debe bloquearse. Delega el procesamiento a un thread separado.
+        """
         data = message_dict.get('data', {})
         task_id = data.get('task_id')
         task_data = data.get('task_data')
@@ -466,28 +470,52 @@ class ScrapperNode(Node):
         
         logging.info(f"Nueva tarea recibida del router: {task_id}")
         
-        # Logging detallado de subordinados
-        with self.subordinates_lock:
-            total_subs = len(self.subordinates)
-            connected_subs = [node_id for node_id, conn in self.subordinates.items() if conn.is_connected()]
-            disconnected_subs = [node_id for node_id, conn in self.subordinates.items() if not conn.is_connected()]
-        
-        logging.info(f"📊 Estado de subordinados: {len(connected_subs)}/{total_subs} conectados")
-        if connected_subs:
-            logging.info(f"  ✓ Conectados: {', '.join(connected_subs)}")
-        if disconnected_subs:
-            logging.info(f"  ✗ Desconectados: {', '.join(disconnected_subs)}")
-        
-        logging.debug(f"Estado actual - Jefe ocupado: {self.is_busy}, Tareas pendientes: {self.task_queue.get_stats()['pending']}")
-        
-        # Añadir a la cola
-        self.task_queue.add_task(task_id, task_data)
-        
-        # Intentar asignar inmediatamente
-        self._try_assign_pending_tasks()
+        # Delegar el procesamiento a un thread separado para no bloquear el thread de recepción
+        threading.Thread(
+            target=self._process_new_task_async,
+            args=(task_id, task_data),
+            daemon=True,
+            name=f"ProcessTask-{task_id}"
+        ).start()
+    
+    def _process_new_task_async(self, task_id, task_data):
+        """
+        Procesa una nueva tarea en un thread separado.
+        Puede bloquearse esperando locks sin afectar la recepción de mensajes.
+        """
+        try:
+            logging.debug(f"[DEBUG] Procesando tarea {task_id} en thread separado")
+            
+            # Logging detallado de subordinados (ahora seguro obtener el lock)
+            with self.subordinates_lock:
+                total_subs = len(self.subordinates)
+                connected_subs = [node_id for node_id, conn in self.subordinates.items() if conn.is_connected()]
+                disconnected_subs = [node_id for node_id, conn in self.subordinates.items() if not conn.is_connected()]
+            
+            logging.info(f"📊 Estado de subordinados: {len(connected_subs)}/{total_subs} conectados")
+            if connected_subs:
+                logging.info(f"  ✓ Conectados: {', '.join(connected_subs)}")
+            if disconnected_subs:
+                logging.info(f"  ✗ Desconectados: {', '.join(disconnected_subs)}")
+            
+            logging.debug(f"Estado actual - Jefe ocupado: {self.is_busy}, Tareas pendientes: {self.task_queue.get_stats()['pending']}")
+            
+            # Añadir a la cola
+            self.task_queue.add_task(task_id, task_data)
+            
+            # Intentar asignar inmediatamente
+            self._try_assign_pending_tasks()
+            
+        except Exception as e:
+            logging.error(f"[ERROR] Excepción en _process_new_task_async: {e}")
+            import traceback
+            logging.error(traceback.format_exc())
     
     def _handle_task_result_from_subordinate(self, node_connection, message_dict):
-        """Handler para cuando un subordinado completa una tarea (solo jefe)"""
+        """
+        Handler para cuando un subordinado completa una tarea (solo jefe).
+        Delega el procesamiento a thread separado para evitar bloquear recepción de mensajes.
+        """
         data = message_dict.get('data', {})
         task_id = data.get('task_id')
         result = data.get('result')
@@ -498,17 +526,33 @@ class ScrapperNode(Node):
         
         logging.info(f"Resultado de tarea {task_id} recibido de {node_connection.node_id}")
         
-        # Marcar tarea como completada
-        self.task_queue.complete_task(task_id, result)
-        
-        # Enviar resultado a BD
-        self._send_result_to_database(task_id, result)
-        
-        # Notificar al router
-        self._notify_router_task_completed(task_id, result)
-        
-        # Intentar asignar más tareas
-        self._try_assign_pending_tasks()
+        # Procesar en thread separado
+        threading.Thread(
+            target=self._process_task_result_async,
+            args=(task_id, result),
+            daemon=True,
+            name=f"ProcessResult-{task_id}"
+        ).start()
+    
+    def _process_task_result_async(self, task_id, result):
+        """Procesa el resultado de una tarea en thread separado"""
+        try:
+            # Marcar tarea como completada
+            self.task_queue.complete_task(task_id, result)
+            
+            # Enviar resultado a BD
+            self._send_result_to_database(task_id, result)
+            
+            # Notificar al router
+            self._notify_router_task_completed(task_id, result)
+            
+            # Intentar asignar más tareas
+            self._try_assign_pending_tasks()
+            
+        except Exception as e:
+            logging.error(f"Error procesando resultado de tarea {task_id}: {e}")
+            import traceback
+            logging.error(traceback.format_exc())
     
     def _handle_task_accepted(self, node_connection, message_dict):
         """Handler para cuando un subordinado acepta una tarea (solo jefe)"""
