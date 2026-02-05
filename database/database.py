@@ -336,7 +336,7 @@ class DatabaseNode(Node):
                 url, source_node_id = url_info
             
             # Obtener subordinados activos actualmente conectados (excluir el que se está desconectando)
-            with self.status_lock:
+            with self.subordinates_lock:
                 connected_node_ids = [nid for nid in self.subordinates.keys() if nid != exclude_node_id]
             
             logging.info(f"[REREPLICATE] Subordinados conectados (excluyendo {exclude_node_id}): {connected_node_ids}")
@@ -384,7 +384,7 @@ class DatabaseNode(Node):
         try:
             # Buscar conexión con el subordinado fuente
             source_conn = None
-            with self.status_lock:
+            with self.subordinates_lock:
                 for node_id, conn in self.subordinates.items():
                     if source_node_id in node_id:
                         source_conn = conn
@@ -505,7 +505,7 @@ class DatabaseNode(Node):
                 
                 # Buscar conexión con el subordinado destino
                 target_conn = None
-                with self.status_lock:
+                with self.subordinates_lock:
                     for node_id, conn in self.subordinates.items():
                         if target_node_id in node_id:
                             target_conn = conn
@@ -1152,7 +1152,7 @@ class DatabaseNode(Node):
                 for node_id in targets:
                     # Buscar conexión
                     target_conn = None
-                    with self.status_lock:
+                    with self.subordinates_lock:
                         for nid, conn in self.subordinates.items():
                             if node_id in nid:
                                 target_conn = conn
@@ -1299,7 +1299,7 @@ class DatabaseNode(Node):
                     content_json, scrapped_at = content_row
                     
                     # Enviar contenido al nuevo subordinado
-                    with self.status_lock:
+                    with self.subordinates_lock:
                         if new_subordinate_id in self.subordinates:
                             subordinate_conn = self.subordinates[new_subordinate_id]
                             
@@ -1571,7 +1571,7 @@ class DatabaseNode(Node):
             
             # Buscar conexión con el subordinado
             subordinate_conn = None
-            with self.status_lock:
+            with self.subordinates_lock:
                 for node_id, conn in self.subordinates.items():
                     if subordinate_id in node_id:
                         subordinate_conn = conn

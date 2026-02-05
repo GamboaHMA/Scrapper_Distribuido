@@ -467,9 +467,10 @@ class ScrapperNode(Node):
         logging.info(f"Nueva tarea recibida del router: {task_id}")
         
         # Logging detallado de subordinados
-        total_subs = len(self.subordinates)
-        connected_subs = [node_id for node_id, conn in self.subordinates.items() if conn.is_connected()]
-        disconnected_subs = [node_id for node_id, conn in self.subordinates.items() if not conn.is_connected()]
+        with self.subordinates_lock:
+            total_subs = len(self.subordinates)
+            connected_subs = [node_id for node_id, conn in self.subordinates.items() if conn.is_connected()]
+            disconnected_subs = [node_id for node_id, conn in self.subordinates.items() if not conn.is_connected()]
         
         logging.info(f"📊 Estado de subordinados: {len(connected_subs)}/{total_subs} conectados")
         if connected_subs:
@@ -560,19 +561,20 @@ class ScrapperNode(Node):
         available_workers = []
         
         # Agregar subordinados disponibles
-        total_subordinates = len(self.subordinates)
-        connected_subordinates = 0
-        busy_subordinates = 0
-        available_subordinate_ids = []
-        
-        for node_id, conn in self.subordinates.items():
-            if conn.is_connected():
-                connected_subordinates += 1
-                if not conn.is_busy:
-                    available_workers.append(('subordinate', node_id, conn))
-                    available_subordinate_ids.append(node_id)
-                else:
-                    busy_subordinates += 1
+        with self.subordinates_lock:
+            total_subordinates = len(self.subordinates)
+            connected_subordinates = 0
+            busy_subordinates = 0
+            available_subordinate_ids = []
+            
+            for node_id, conn in self.subordinates.items():
+                if conn.is_connected():
+                    connected_subordinates += 1
+                    if not conn.is_busy:
+                        available_workers.append(('subordinate', node_id, conn))
+                        available_subordinate_ids.append(node_id)
+                    else:
+                        busy_subordinates += 1
         
         logging.info(f"🔍 Subordinados: {total_subordinates} totales, {connected_subordinates} conectados, "
                      f"{busy_subordinates} ocupados, {len(available_subordinate_ids)} disponibles")
