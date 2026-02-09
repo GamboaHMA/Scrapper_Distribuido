@@ -68,32 +68,32 @@ network-clean: ## Eliminar la red scrapper-network
 
 build-scrapper: ## Construir imagen de ScrapperNode
 	@echo "$(YELLOW)Construyendo ScrapperNode...$(NC)"
-	docker build -t $(SCRAPPER_NODE_IMAGE) -f scrapper/Dockerfile .
+	docker build --no-cache -t $(SCRAPPER_NODE_IMAGE) -f scrapper/Dockerfile .
 	@echo "$(GREEN)✅ ScrapperNode construido$(NC)"
 
 build-router: ## Construir imagen de RouterNode
 	@echo "$(YELLOW)Construyendo RouterNode...$(NC)"
-	docker build -t $(ROUTER_NODE_IMAGE) -f router/Dockerfile .
+	docker build --no-cache -t $(ROUTER_NODE_IMAGE) -f router/Dockerfile .
 	@echo "$(GREEN)✅ RouterNode construido$(NC)"
 
 build-database: ## Construir imagen de DatabaseNode
 	@echo "$(YELLOW)Construyendo DatabaseNode...$(NC)"
-	docker build -t $(DATABASE_NODE_IMAGE) -f database/Dockerfile .
+	docker build --no-cache -t $(DATABASE_NODE_IMAGE) -f database/Dockerfile .
 	@echo "$(GREEN)✅ DatabaseNode construido$(NC)"
 
 build-client: ## Construir imagen del Cliente
 	@echo "$(YELLOW)Construyendo Cliente...$(NC)"
-	docker build -t $(CLIENT_IMAGE) -f client/Dockerfile .
+	docker build --no-cache -t $(CLIENT_IMAGE) -f client/Dockerfile .
 	@echo "$(GREEN)✅ Cliente construido$(NC)"
 
 build-streamlit: ## Construir imagen de Streamlit UI
 	@echo "$(YELLOW)Construyendo Interfaz Streamlit...$(NC)"
-	docker build -t streamlit-app -f streamlit_app/Dockerfile .
+	docker build --no-cache -t streamlit-app -f streamlit_app/Dockerfile .
 	@echo "$(GREEN)✅ Streamlit UI construido$(NC)"
 
 build-web-client: ## Construir imagen del Cliente Web
 	@echo "$(YELLOW)Construyendo Cliente Web...$(NC)"
-	docker build -t $(WEB_CLIENT_IMAGE) -f web_client/Dockerfile .
+	docker build --no-cache -t $(WEB_CLIENT_IMAGE) -f web_client/Dockerfile .
 	@echo "$(GREEN)✅ Cliente Web construido$(NC)"
 
 build-all: build-scrapper build-router build-database build-client build-web-client ## Construir todas las imágenes

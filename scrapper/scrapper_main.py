@@ -93,10 +93,10 @@ class TaskQueue:
             return False
     
     def get_tasks_by_node(self, node_id):
-        """Obtiene todas las tareas asignadas a un nodo específico"""
-        with self.lock:
-            return [task_id for task_id, info in self.tasks.items() 
-                   if info.get('assigned_to') == node_id and info.get('status') == 'assigned']
+        """Obtiene todas las tareas asignadas a un nodo específico
+        NOTA: El llamador debe tener el lock"""
+        return [task_id for task_id, info in self.tasks.items() 
+               if info.get('assigned_to') == node_id and info.get('status') == 'assigned']
     
     def reassign_node_tasks(self, node_id):
         """Reasigna todas las tareas de un nodo que se desconectó"""
@@ -492,16 +492,24 @@ class ScrapperNode(Node):
                 connected_subs = [node_id for node_id, conn in self.subordinates.items() if conn.is_connected()]
                 disconnected_subs = [node_id for node_id, conn in self.subordinates.items() if not conn.is_connected()]
             
+            # Lock liberado - log inmediato
+            logging.debug(f"[DEBUG] Lock de subordinados liberado")
+            
             logging.info(f"📊 Estado de subordinados: {len(connected_subs)}/{total_subs} conectados")
             if connected_subs:
                 logging.info(f"  ✓ Conectados: {', '.join(connected_subs)}")
             if disconnected_subs:
                 logging.info(f"  ✗ Desconectados: {', '.join(disconnected_subs)}")
             
-            logging.debug(f"Estado actual - Jefe ocupado: {self.is_busy}, Tareas pendientes: {self.task_queue.get_stats()['pending']}")
+            logging.debug(f"[DEBUG] Obteniendo stats de task_queue...")
+            stats = self.task_queue.get_stats()
+            logging.debug(f"[DEBUG] Stats obtenidos: {stats}")
+            logging.debug(f"Estado actual - Jefe ocupado: {self.is_busy}, Tareas pendientes: {stats['pending']}")
             
             # Añadir a la cola
+            logging.debug(f"[DEBUG] Añadiendo tarea {task_id} a la cola...")
             self.task_queue.add_task(task_id, task_data)
+            logging.debug(f"[DEBUG] Tarea añadida correctamente")
             
             # Intentar asignar inmediatamente
             self._try_assign_pending_tasks()

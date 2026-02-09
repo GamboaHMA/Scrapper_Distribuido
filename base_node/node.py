@@ -1178,6 +1178,8 @@ class Node:
         
         # 2. Verificar subordinados (si soy jefe)
         if self.i_am_boss:
+            # Primero identificar y eliminar subordinados muertos con el lock
+            nodes_to_reassign = []
             with self.subordinates_lock:
                 if self.subordinates:
                     logging.debug(f"🔍 Verificando {len(self.subordinates)} subordinados...")
@@ -1196,7 +1198,7 @@ class Node:
                             logging.info(f"Desconectando subordinado muerto: {node_id}")
                             conn.disconnect()
                             
-                            self.reassign_tasks_from_subordinate(node_id)
+                            nodes_to_reassign.append(node_id)
                             
                             del self.subordinates[node_id]
                             
@@ -1209,6 +1211,10 @@ class Node:
                     if dead_nodes:
                         logging.info(f"Limpieza completada: {len(dead_nodes)} nodos eliminados")
                         logging.info(f"Subordinados activos: {len(self.subordinates)}")
+            
+            # Reasignar tareas FUERA del lock para evitar deadlock
+            for node_id in nodes_to_reassign:
+                self.reassign_tasks_from_subordinate(node_id)
         
         # 3. Verificar conexiones con otros jefes
         for node_type, conn in list(self.bosses_connections.items()):
