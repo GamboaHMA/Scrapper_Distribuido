@@ -1021,10 +1021,11 @@ class RouterNode(Node):
                 router_ip,
                 self.port,
                 query_message,
+                expect_response=True,
                 timeout=2
             )
             
-            if response:
+            if response is not None:
                 data = response.get('data', {})
                 is_boss = data.get('is_boss', False)
                 boss_ip = data.get('boss_ip')
@@ -1197,10 +1198,11 @@ class RouterNode(Node):
             new_boss_ip,
             self.port,
             identification,
+            expect_response=True,
             timeout=5
         )
         
-        if response and response.get('data', {}).get('is_boss'):
+        if response is not None and response.get('data', {}).get('is_boss'):
             logging.info(f"✓ Nuevo jefe {new_boss_ip} confirmado")
             
             # Establecer conexión persistente
@@ -1294,10 +1296,11 @@ class RouterNode(Node):
                 new_boss_ip,
                 new_boss_port,
                 identification,
+                expect_response=True,
                 timeout=5
             )
             
-            if not response:
+            if response is None:
                 logging.error(f"✗ Nuevo jefe {new_boss_ip} no respondió a identificación temporal")
                 return
             
