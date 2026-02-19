@@ -111,6 +111,9 @@ class RouterNode(Node):
         # Cola de tareas
         self.task_queue = TaskQueue()
         
+        # IP del jefe router (si soy subordinado)
+        self.my_boss_ip = None
+        
         # Perfiles de jefes externos
         self.external_bosses = {
             'bd': BossProfile('bd', bd_port),
@@ -1021,11 +1024,10 @@ class RouterNode(Node):
                 router_ip,
                 self.port,
                 query_message,
-                expect_response=True,
                 timeout=2
             )
             
-            if response is not None:
+            if response and isinstance(response, dict):
                 data = response.get('data', {})
                 is_boss = data.get('is_boss', False)
                 boss_ip = data.get('boss_ip')
@@ -1102,9 +1104,7 @@ class RouterNode(Node):
                 ).start()
         else:
             # Soy subordinado, informo quién es mi jefe
-            boss_ip = None
-            if self.boss_connection and self.boss_connection.is_connected():
-                boss_ip = self.boss_connection.ip
+            boss_ip = self.my_boss_ip  # Usar la variable que guardamos al ceder
             
             logging.info(f"Soy subordinado. Mi jefe es: {boss_ip or 'desconocido'}")
             
@@ -1180,52 +1180,32 @@ class RouterNode(Node):
         
         logging.info("Subordinados desconectados y tareas de jefe detenidas")
         
-        # 4. Conectarse al nuevo jefe
+        # 4. Guardar IP del nuevo jefe
+        self.my_boss_ip = new_boss_ip
+        
+        # 5. Notificar al nuevo jefe que hemos cedido (mensaje temporal solamente)
         time.sleep(2)  # Dar tiempo a que el nuevo jefe esté listo
         
-        logging.info(f"Conectando al nuevo jefe {new_boss_ip}:{self.port}...")
+        logging.info(f"Notificando a nuevo jefe {new_boss_ip}:{self.port} que he cedido...")
         
-        # Enviar identificación temporal
+        # Enviar identificación temporal para confirmar que cedimos
         identification = self._create_message(
             MessageProtocol.MESSAGE_TYPES['IDENTIFICATION'],
             {
                 'node_port': self.port,
-                'is_boss': False
+                'is_boss': False,
+                'is_temporary': True  # Solo notificación, no conexión persistente
             }
         )
         
-        response = self.send_temporary_message(
+        self.send_temporary_message(
             new_boss_ip,
             self.port,
             identification,
-            expect_response=True,
             timeout=5
         )
         
-        if response is not None and response.get('data', {}).get('is_boss'):
-            logging.info(f"✓ Nuevo jefe {new_boss_ip} confirmado")
-            
-            # Establecer conexión persistente
-            self.boss_connection = NodeConnection(
-                self.node_type,
-                new_boss_ip,
-                self.port,
-                on_message_callback=self._handle_message_from_node,
-                sender_node_type=self.node_type,
-                sender_id=self.node_id
-            )
-            
-            if self.boss_connection.connect():
-                logging.info(f"✓ Conexión persistente con nuevo jefe {new_boss_ip} establecida")
-                
-                # Enviar identificación por conexión persistente
-                self.boss_connection.send_message(identification)
-                
-                logging.info(f"🎉 Reunificación completada - Ahora soy subordinado de {new_boss_ip}")
-            else:
-                logging.error(f"✗ No se pudo establecer conexión persistente con {new_boss_ip}")
-        else:
-            logging.error(f"✗ El nuevo jefe {new_boss_ip} no respondió correctamente")
+        logging.info(f"Proceso de cesión de jefatura a {new_boss_ip} completado")
 
     def _handle_new_boss_persistent(self, node_connection, message):
         """
@@ -1296,11 +1276,10 @@ class RouterNode(Node):
                 new_boss_ip,
                 new_boss_port,
                 identification,
-                expect_response=True,
                 timeout=5
             )
             
-            if response is None:
+            if not response:
                 logging.error(f"✗ Nuevo jefe {new_boss_ip} no respondió a identificación temporal")
                 return
             
