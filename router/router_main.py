@@ -1046,28 +1046,46 @@ class RouterNode(Node):
                         # ¡Soy su jefe! Debo adoptarlo como subordinado
                         logging.info(f"Router {router_ip} me reconoce como jefe. Adoptándolo como subordinado...")
                         self.add_subordinate(router_ip)
-                    else:
-                        if boss_ip is None or compare_ips(self.ip, boss_ip) > 0:
-                            # Mi IP es mayor que la del jefe del otro router, debo ser su jefe
-                            logging.info(f"Router {router_ip} es subordinado de {boss_ip}, pero mi IP es mayor. Intentando reunificación...")
-                            # Mandar NEW_BOSS al subordinado para que me reconozca como jefe
-                            new_boss_msg = self._create_message(
-                                MessageProtocol.MESSAGE_TYPES['NEW_BOSS'],
-                                {
-                                    'boss_ip': self.ip,
-                                    'boss_port': self.port
-                                }
-                            )
-                            self.send_temporary_message(
-                                router_ip,
-                                self.port,
-                                new_boss_msg,
-                                timeout=5
-                            )
-                            logging.debug(f'Mensaje NEW_BOSS enviado a {router_ip} para reunificación')
-                            
-                            self.add_subordinate(router_ip)
-                            logging.info(f"✓ Router {router_ip} adoptado como subordinado")
+                    elif compare_ips(self.ip, boss_ip) > 0:
+                        # Mi IP es mayor que la del jefe del otro router, debo ser su jefe
+                        logging.info(f"Router {router_ip} es subordinado de {boss_ip}, pero mi IP es mayor. Intentando reunificación...")
+                        # Mandar NEW_BOSS al subordinado para que me reconozca como jefe
+                        new_boss_msg = self._create_message(
+                            MessageProtocol.MESSAGE_TYPES['NEW_BOSS'],
+                            {
+                                'boss_ip': self.ip,
+                                'boss_port': self.port
+                            }
+                        )
+                        self.send_temporary_message(
+                            router_ip,
+                            self.port,
+                            new_boss_msg,
+                            timeout=5
+                        )
+                        logging.debug(f'Mensaje NEW_BOSS enviado a {router_ip} para reunificación')
+                        
+                        self.add_subordinate(router_ip)
+                        logging.info(f"✓ Router {router_ip} adoptado como subordinado")
+                elif boss_ip is None:
+                    # Mandar NEW_BOSS al subordinado para que me reconozca como jefe
+                    new_boss_msg = self._create_message(
+                        MessageProtocol.MESSAGE_TYPES['NEW_BOSS'],
+                        {
+                            'boss_ip': self.ip,
+                            'boss_port': self.port
+                        }
+                    )
+                    self.send_temporary_message(
+                        router_ip,
+                        self.port,
+                        new_boss_msg,
+                        timeout=5
+                    )
+                    logging.debug(f'Mensaje NEW_BOSS enviado a {router_ip} para reunificación')
+                    
+                    self.add_subordinate(router_ip)
+                    logging.info(f"✓ Router {router_ip} adoptado como subordinado")
                 else:
                     logging.warning(f"Router {router_ip} respondió sin información de jefe")
             else:
