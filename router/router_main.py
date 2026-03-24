@@ -1027,10 +1027,13 @@ class RouterNode(Node):
                 router_ip,
                 self.port,
                 query_message,
-                timeout=2
+                timeout=3
             )
             
-            if response and isinstance(response, dict):
+            if response:
+                logging.debug(f"Respuesta recibida de {router_ip} a LEADER_QUERY: {response}")
+                if isinstance(response, dict):
+                    logging.debug(f"Isinstance of dict confirmed for response from {router_ip}")
                 data = response.get('data', {})
                 is_boss = data.get('is_boss', False)
                 boss_ip = data.get('boss_ip')
