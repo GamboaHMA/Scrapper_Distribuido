@@ -971,7 +971,14 @@ class ScrapperNode(Node):
                     if not self.i_am_boss:
                         break
                     
-                    # Enviar ELECTION para detectar si el otro nodo está vivo
+                    # Intentar adoptar directamente como subordinado primero
+                    # Esto evita usar ELECTION cuando simplemente el nodo no se registró aún
+                    logging.info(f"🔗 Intentando adoptar scrapper desconocido {scrapper_ip} como subordinado...")
+                    if self.add_subordinate(scrapper_ip):
+                        logging.info(f"✅ Scrapper {scrapper_ip} adoptado como subordinado")
+                        continue
+                    
+                    # Si no se pudo conectar directamente, verificar si es otro jefe usando ELECTION
                     election_msg = self._create_message(
                         MessageProtocol.MESSAGE_TYPES['ELECTION'],
                         {
@@ -980,7 +987,7 @@ class ScrapperNode(Node):
                         }
                     )
                     
-                    logging.info(f"🗳️ Enviando elección a scrapper desconocido {scrapper_ip}...")
+                    logging.info(f"🗳️ No se pudo adoptar {scrapper_ip}, enviando elección para verificar su estado...")
                     response = self.send_temporary_message(
                         scrapper_ip, self.port, election_msg,
                         expect_response=True, timeout=3.0, node_type=self.node_type
@@ -992,14 +999,21 @@ class ScrapperNode(Node):
                         if compare_ips(other_ip, self.ip) > 0:
                             # El otro tiene IP mayor → yo debo ceder jefatura
                             logging.warning(f"⚠️ Otro jefe scrapper {other_ip} tiene IP mayor. Cediendo jefatura directamente...")
-                            # _demote_to_subordinate notifica a subordinados, para boss tasks y conecta al nuevo jefe
                             threading.Thread(target=self._demote_to_subordinate, args=(other_ip,), daemon=True).start()
                             break
                         else:
-                            # Mi IP es mayor → el otro cederá cuando ejecute su propio loop de reunificación
-                            logging.info(f"Scrapper {other_ip} respondió pero su IP es menor. Mantengo jefatura.")
+                            # Mi IP es mayor y ya intenté adoptarlo sin éxito → reenviar NEW_BOSS
+                            logging.info(f"Scrapper {other_ip} tiene IP menor pero no se pudo conectar. Enviando NEW_BOSS...")
+                            new_boss_msg = self._create_message(
+                                MessageProtocol.MESSAGE_TYPES['NEW_BOSS'],
+                                {'ip': self.ip, 'port': self.port}
+                            )
+                            self.send_temporary_message(
+                                scrapper_ip, self.port, new_boss_msg,
+                                expect_response=False, node_type=self.node_type
+                            )
                     elif response is None:
-                        logging.debug(f"Scrapper {scrapper_ip} no respondió a elección")
+                        logging.debug(f"Scrapper {scrapper_ip} no respondió - puede estar caído")
                     
             except Exception as e:
                 logging.error(f"Error en loop de reunificación scrapper: {e}")
