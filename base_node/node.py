@@ -21,6 +21,36 @@ PORTS = {
     'router': 7070
 }
 
+def compare_ips(ip1, ip2):
+    """
+    Compara dos direcciones IP numéricamente, no lexicográficamente.
+    
+    Returns:
+        -1 si ip1 < ip2
+        0 si ip1 == ip2
+        1 si ip1 > ip2
+    """
+    try:
+        # Convertir IPs a tuplas de enteros para comparación numérica
+        parts1 = tuple(int(x) for x in ip1.split('.'))
+        parts2 = tuple(int(x) for x in ip2.split('.'))
+        
+        if parts1 < parts2:
+            return -1
+        elif parts1 > parts2:
+            return 1
+        else:
+            return 0
+    except (ValueError, AttributeError):
+        # Fallback a comparación lexicográfica si hay error
+        logging.warning(f"Error comparando IPs {ip1} y {ip2}, usando comparación lexicográfica")
+        if ip1 < ip2:
+            return -1
+        elif ip1 > ip2:
+            return 1
+        else:
+            return 0
+
 # Por defecto INFO, pero se puede cambiar con LOG_LEVEL=DEBUG
 log_level = os.environ.get('LOG_LEVEL', 'INFO').upper()
 logging.basicConfig(
@@ -511,8 +541,10 @@ class Node:
                     # Es otro jefe de mi mismo tipo → COMPARAR IPs
                     logging.warning(f"⚠️  Conflicto: Otro jefe {sender_node_type} ({client_ip}) detectado. Comparando IPs...")
                     
-                    # Comparar IPs lexicográficamente
-                    if self.ip > client_ip:
+                    # Comparar IPs numéricamente (no lexicográficamente)
+                    ip_comparison = compare_ips(self.ip, client_ip)
+                    
+                    if ip_comparison > 0:
                         # Mi IP es mayor → YO sigo siendo jefe, él se vuelve subordinado
                         logging.info(f"✓ Mi IP ({self.ip}) > Su IP ({client_ip}). Mantengo rol de jefe, registrándolo como subordinado.")
                         
@@ -544,8 +576,8 @@ class Node:
                             logging.error(f"No se pudo registrar {client_ip} como subordinado")
                             sock.close()
                     else:
-                        # Su IP es mayor → ÉL debe ser jefe, yo me vuelvo subordinado
-                        logging.warning(f"⚠️  Su IP ({client_ip}) > Mi IP ({self.ip}). Cediendo rol de jefe...")
+                        # Su IP es mayor o igual → ÉL debe ser jefe, yo me vuelvo subordinado
+                        logging.warning(f"⚠️  Su IP ({client_ip}) >= Mi IP ({self.ip}). Cediendo rol de jefe...")
                         
                         # Cerrar el socket entrante (él debe iniciar la conexión como jefe)
                         sock.close()
@@ -687,8 +719,10 @@ class Node:
         
         sock.close()
         
-        # Iniciar mis propias elecciones (por si acaso)
-        threading.Thread(target=self.call_elections, daemon=True).start()
+        # Solo iniciar elecciones si no soy jefe todavía
+        # Si ya soy jefe, no es necesario (y podría disrumpir conexiones activas)
+        if not self.i_am_boss:
+            threading.Thread(target=self.call_elections, daemon=True).start()
     
     def _handle_new_boss_message(self, sock, client_ip, message):
         """
@@ -1571,10 +1605,10 @@ class Node:
             self._become_boss()
             return
         
-        # Filtrar nodos con IP mayor que la mía
+        # Filtrar nodos con IP mayor que la mía (comparación numérica)
         higher_ip_nodes = []
         for ip, info in known_nodes_of_my_type.items():
-            if ip > self.ip:
+            if compare_ips(ip, self.ip) > 0:
                 higher_ip_nodes.append((ip, info["port"]))
         
         if not higher_ip_nodes:
@@ -1583,7 +1617,7 @@ class Node:
             return
         
         # Ordenar de mayor a menor IP (para encontrar al jefe más rápido)
-        higher_ip_nodes.sort(reverse=True)
+        higher_ip_nodes.sort(key=lambda x: tuple(int(p) for p in x[0].split('.')), reverse=True)
         logging.info(f"Contactando nodos con IP mayor: {[ip for ip, _ in higher_ip_nodes]}")
         
         # Enviar mensaje de elección a cada uno (de mayor a menor)

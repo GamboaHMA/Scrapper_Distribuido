@@ -9,6 +9,7 @@ import queue
 from .scrapper import get_html_from_url
 # Importar utilidades compartidas
 from base_node.utils import NodeConnection, MessageProtocol, BossProfile
+from base_node.node import compare_ips
 
 
 # Por defecto INFO, pero se puede cambiar con LOG_LEVEL=DEBUG
@@ -923,7 +924,88 @@ class ScrapperNode(Node):
         # Conectar con jefes externos
         # self._connect_to_external_bosses()
         self._start_task_assignment_thread()
+        
+        # Loop de reunificación: detecta otros jefes scrapper cuando la red se reconecta
+        threading.Thread(target=self._scrapper_reunification_loop, daemon=True, name="ScrapperReunification").start()
+        
         logging.info("✓ Jefe Scrapper operativo")
+    
+    def _scrapper_reunification_loop(self):
+        """
+        Loop periódico que busca otros jefes scrapper en la red.
+        Si detecta otro jefe scrapper, inicia elecciones para resolver el conflicto.
+        Solo se ejecuta cuando este nodo es jefe.
+        """
+        logging.info("🔄 Iniciando hilo de reunificación de red scrapper...")
+        check_interval = 30
+        
+        while self.running and self.i_am_boss:
+            try:
+                time.sleep(check_interval)
+                
+                if not self.i_am_boss:
+                    break
+                
+                # Descubrir todos los scrappers en la red
+                discovered_ips = self.discover_nodes(self.node_type, self.port)
+                
+                if not discovered_ips:
+                    continue
+                
+                # Obtener IPs de mis subordinados actuales
+                subordinate_ips = set()
+                with self.subordinates_lock:
+                    for conn in self.subordinates.values():
+                        subordinate_ips.add(conn.ip)
+                
+                # Buscar scrappers que no son yo ni mis subordinados
+                unknown_scrapers = [ip for ip in discovered_ips
+                                    if ip != self.ip and ip not in subordinate_ips]
+                
+                if not unknown_scrapers:
+                    continue
+                
+                logging.info(f"🔍 Detectados {len(unknown_scrapers)} scrapper(s) desconocido(s): {unknown_scrapers}")
+                
+                for scrapper_ip in unknown_scrapers:
+                    if not self.i_am_boss:
+                        break
+                    
+                    # Enviar ELECTION para detectar si el otro nodo está vivo
+                    election_msg = self._create_message(
+                        MessageProtocol.MESSAGE_TYPES['ELECTION'],
+                        {
+                            'ip': self.ip,
+                            'port': self.port
+                        }
+                    )
+                    
+                    logging.info(f"🗳️ Enviando elección a scrapper desconocido {scrapper_ip}...")
+                    response = self.send_temporary_message(
+                        scrapper_ip, self.port, election_msg,
+                        expect_response=True, timeout=3.0, node_type=self.node_type
+                    )
+                    
+                    if response and isinstance(response, dict) and response.get('type') == MessageProtocol.MESSAGE_TYPES['ELECTION_RESPONSE']:
+                        other_ip = response.get('data', {}).get('ip', scrapper_ip)
+                        
+                        if compare_ips(other_ip, self.ip) > 0:
+                            # El otro tiene IP mayor → yo debo ceder jefatura
+                            logging.warning(f"⚠️ Otro jefe scrapper {other_ip} tiene IP mayor. Cediendo jefatura directamente...")
+                            # _demote_to_subordinate notifica a subordinados, para boss tasks y conecta al nuevo jefe
+                            threading.Thread(target=self._demote_to_subordinate, args=(other_ip,), daemon=True).start()
+                            break
+                        else:
+                            # Mi IP es mayor → el otro cederá cuando ejecute su propio loop de reunificación
+                            logging.info(f"Scrapper {other_ip} respondió pero su IP es menor. Mantengo jefatura.")
+                    elif response is None:
+                        logging.debug(f"Scrapper {scrapper_ip} no respondió a elección")
+                    
+            except Exception as e:
+                logging.error(f"Error en loop de reunificación scrapper: {e}")
+                time.sleep(5)
+        
+        logging.info("🔄 Hilo de reunificación scrapper detenido")
     
     def stop_boss_tasks(self):
         """
