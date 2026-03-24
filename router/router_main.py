@@ -1072,8 +1072,8 @@ class RouterNode(Node):
                     new_boss_msg = self._create_message(
                         MessageProtocol.MESSAGE_TYPES['NEW_BOSS'],
                         {
-                            'boss_ip': self.ip,
-                            'boss_port': self.port
+                            'ip': self.ip,
+                            'port': self.port
                         }
                     )
                     self.send_temporary_message(
