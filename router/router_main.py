@@ -1027,6 +1027,7 @@ class RouterNode(Node):
                 router_ip,
                 self.port,
                 query_message,
+                expect_response=True,
                 timeout=3
             )
             
