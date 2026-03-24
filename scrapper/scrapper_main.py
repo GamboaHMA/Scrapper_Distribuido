@@ -968,15 +968,13 @@ class ScrapperNode(Node):
                 logging.info(f"🔍 Detectados {len(unknown_scrapers)} scrapper(s) desconocido(s): {unknown_scrapers}")
                 
                 for scrapper_ip in unknown_scrapers:
-                    if not self.i_am_boss:
-                        break
                     
-                    # Intentar adoptar directamente como subordinado primero
-                    # Esto evita usar ELECTION cuando simplemente el nodo no se registró aún
-                    logging.info(f"🔗 Intentando adoptar scrapper desconocido {scrapper_ip} como subordinado...")
-                    if self.add_subordinate(scrapper_ip):
-                        logging.info(f"✅ Scrapper {scrapper_ip} adoptado como subordinado")
-                        continue
+                    # # Intentar adoptar directamente como subordinado primero
+                    # # Esto evita usar ELECTION cuando simplemente el nodo no se registró aún
+                    # logging.info(f"🔗 Intentando adoptar scrapper desconocido {scrapper_ip} como subordinado...")
+                    # if self.add_subordinate(scrapper_ip):
+                    #     logging.info(f"✅ Scrapper {scrapper_ip} adoptado como subordinado")
+                    #     continue
                     
                     # Si no se pudo conectar directamente, verificar si es otro jefe usando ELECTION
                     election_msg = self._create_message(
@@ -1012,6 +1010,7 @@ class ScrapperNode(Node):
                                 scrapper_ip, self.port, new_boss_msg,
                                 expect_response=False, node_type=self.node_type
                             )
+                            
                     elif response is None:
                         logging.debug(f"Scrapper {scrapper_ip} no respondió - puede estar caído")
                     

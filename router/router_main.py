@@ -763,7 +763,10 @@ class RouterNode(Node):
             # Enviar identificación temporal
             msg = self._create_message(
                 MessageProtocol.MESSAGE_TYPES['IDENTIFICATION'],
-                {'is_temporary': True}
+                {
+                    'is_temporary': True,
+                    'is_boss': False,  # No soy jefe, solo quiero saber si el otro lo es
+                }
             )
             
             response = self.send_temporary_message(
