@@ -14,7 +14,7 @@ YELLOW = \033[1;33m
 RED = \033[0;31m
 NC = \033[0m
 
-.PHONY: help network network-inspect network-clean build build-all run run-all clean clean-all
+.PHONY: help network network-inspect network-clean build build-all run run-all clean clean-all logs
 
 # =============================================================================
 # AYUDA
@@ -465,5 +465,29 @@ swarm-update-node: ## Actualizar disponibilidad de un nodo (requiere NODE_ID y A
 	@echo "$(YELLOW)Actualizando nodo $(NODE_ID) a $(AVAILABILITY)...$(NC)"
 	docker node update --availability $(AVAILABILITY) $(NODE_ID)
 	@echo "$(GREEN)✅ Nodo actualizado$(NC)"
+
+# =============================================================================
+# LOGS
+# =============================================================================
+
+LOGS_DIR ?= logs
+
+logs: ## Extraer logs de todos los contenedores en la red $(NETWORK_NAME) a archivos en ./logs/
+	@echo "$(YELLOW)Extrayendo logs de contenedores en la red $(NETWORK_NAME)...$(NC)"
+	@mkdir -p $(LOGS_DIR)
+	@CONTAINERS=$$(docker network inspect $(NETWORK_NAME) \
+		--format '{{range .Containers}}{{.Name}} {{end}}' 2>/dev/null); \
+	if [ -z "$$CONTAINERS" ]; then \
+		echo "$(RED)No hay contenedores conectados a la red $(NETWORK_NAME) o la red no existe.$(NC)"; \
+		exit 1; \
+	fi; \
+	COUNT=0; \
+	for CONTAINER in $$CONTAINERS; do \
+		OUTFILE="$(LOGS_DIR)/$${CONTAINER}.txt"; \
+		echo "  📄 $$CONTAINER → $$OUTFILE"; \
+		docker logs "$$CONTAINER" > "$$OUTFILE" 2>&1; \
+		COUNT=$$((COUNT + 1)); \
+	done; \
+	echo "$(GREEN)✅ Logs de $$COUNT contenedor(es) guardados en ./$(LOGS_DIR)/$(NC)"
 
 
