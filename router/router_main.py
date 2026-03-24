@@ -1036,7 +1036,13 @@ class RouterNode(Node):
                     logging.warning(f"⚠️  Router {router_ip} también es JEFE - Partición de red detectada!")
                     logging.info(f"Mi IP: {self.ip}, Su IP: {router_ip}")
                 elif boss_ip:
-                    logging.info(f"Router {router_ip} es subordinado (jefe: {boss_ip})")
+                    # El router es subordinado
+                    if boss_ip == self.ip:
+                        # ¡Soy su jefe! Debo adoptarlo como subordinado
+                        logging.info(f"Router {router_ip} me reconoce como jefe. Adoptándolo como subordinado...")
+                        self.add_subordinate(router_ip)
+                    else:
+                        logging.info(f"Router {router_ip} es subordinado de otro jefe: {boss_ip}")
                 else:
                     logging.warning(f"Router {router_ip} respondió sin información de jefe")
             else:
@@ -1198,14 +1204,18 @@ class RouterNode(Node):
             }
         )
         
-        self.send_temporary_message(
+        response = self.send_temporary_message(
             new_boss_ip,
             self.port,
             identification,
             timeout=5
         )
         
-        logging.info(f"Proceso de cesión de jefatura a {new_boss_ip} completado")
+        if response and response.get('data', {}).get('is_boss'):
+            logging.info(f"✓ Nuevo jefe {new_boss_ip} confirmado - esperando que me adopte como subordinado")
+            logging.info(f"🎉 Reunificación completada - Ahora soy subordinado de {new_boss_ip}")
+        else:
+            logging.error(f"❌ No se pudo confirmar nuevo jefe {new_boss_ip}")
 
     def _handle_new_boss_persistent(self, node_connection, message):
         """
