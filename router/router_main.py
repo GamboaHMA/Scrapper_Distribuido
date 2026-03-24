@@ -21,7 +21,7 @@ from queue import Queue, Empty
 # Agregar directorio padre al path para imports absolutos
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from base_node.node import Node
+from base_node.node import Node, compare_ips
 from base_node.utils import MessageProtocol, NodeConnection, BossProfile
 
 
@@ -1070,8 +1070,8 @@ class RouterNode(Node):
             # Soy jefe también - CONFLICTO DE PARTICIÓN
             logging.warning(f"⚠️  PARTICIÓN DETECTADA: Ambos somos jefes ({self.ip} y {client_ip})")
             
-            # Comparar IPs para resolver conflicto (algoritmo Bully)
-            if self.ip > client_ip:
+            # Comparar IPs para resolver conflicto (algoritmo Bully) - comparación numérica
+            if compare_ips(self.ip, client_ip) > 0:
                 # Mi IP es mayor, YO mantengo jefatura
                 logging.info(f"✓ Mi IP ({self.ip}) > Su IP ({client_ip}). Mantengo jefatura.")
                 
@@ -1211,7 +1211,7 @@ class RouterNode(Node):
             timeout=5
         )
         
-        if response and response.get('data', {}).get('is_boss'):
+        if response and isinstance(response, dict) and response.get('data', {}).get('is_boss'):
             logging.info(f"✓ Nuevo jefe {new_boss_ip} confirmado - esperando que me adopte como subordinado")
             logging.info(f"🎉 Reunificación completada - Ahora soy subordinado de {new_boss_ip}")
         else:
