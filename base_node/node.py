@@ -332,7 +332,11 @@ class Node:
         """
         sender_type = node_connection.node_type if node_connection else "desconocido"
         logging.debug(f"📥 NEW_EXTERNAL_BOSS recibido por conexión persistente desde {sender_type}")
+        logging.debug(f"llaves para bosses_connections: {self.bosses_connections.keys()}")
+
         self._process_new_external_boss_info(message_dict.get('data', {}), sender_type)
+        logging.debug(f"llaves para bosses_connections(after): {self.bosses_connections.keys()}")
+
     
     def _handle_new_external_boss_temporary(self, sock, client_ip, message):
         """
@@ -1825,6 +1829,15 @@ class Node:
             # TODO: Conectar con jefes de BD y Router si es necesario
             # self.discover_nodes("bd", self.bd_port)
             # self.connect_to_discovered_nodes("bd")
+
+            # hilo para que se reconecte con el jefe bd
+            if self.node_type == 'scrapper':
+                threading.Thread(
+                    target=self.mantener_conex_con_bd_boss,
+                    daemon=True,
+                    name='mantener-conex-con-bd-boss'
+                ).start()
+
         else:
             logging.info(f"✓ Soy subordinado {self.node_type}, conectado al jefe en {self.boss_connection.ip if self.boss_connection else 'desconocido'}")
         
@@ -1848,6 +1861,56 @@ class Node:
             logging.info("Deteniendo nodo...")
             self.stop()
             
+    def mantener_conex_con_bd_boss(self):
+        while(self.running):
+            if 'bd' in self.bosses_connections.keys():
+                # logging.debug("ya tengo conexion registrada con jefe bd")
+                pass
+            else:
+                logging.debug("no tengo conexion registrada con jefe bd")
+            
+            if 'bd' in self.external_bosses_cache.keys():
+                # logging.debug(f'existe info de jefe bd en cache: bd:{self.external_bosses_cache["bd"]}')
+                if 'bd' not in self.bosses_connections.keys():
+                    # conectar con jefe bd
+                    conn = NodeConnection(
+                        'bd',
+                        self.external_bosses_cache['bd']['ip'],
+                        self.external_bosses_cache['bd']['port'],
+                        on_message_callback=self._handle_message_from_node,
+                        sender_node_type=self.node_type,
+                        sender_id=self.node_id
+                    )
+
+                    if conn.connect():
+                        self.bosses_connections['bd'] = conn
+                        
+                        # Enviar identificación
+                        conn.send_message(
+                            self._create_message(
+                                MessageProtocol.MESSAGE_TYPES['IDENTIFICATION'],
+                                {
+                                    'ip': self.ip,
+                                    'port': self.port,
+                                    'is_boss': True
+                                }
+                            )
+                        )
+                        
+                        # Replicar info a subordinados
+                        self.replicate_external_bosses_info()
+                        
+                        logging.info(f"✓ (reset) Conexión con jefe externo {'bd'} ({self.external_bosses_cache['bd']['ip']}:{self.external_bosses_cache['bd']['port']}) establecida")
+                    else:
+                        logging.error(f"✗ (reset) No se pudo conectar con jefe externo {'bd'} en {self.external_bosses_cache['bd']['ip']}:{self.external_bosses_cache['bd']['port']}")
+                else:
+                    # logging.debug("ya tengo conexion con jefe bd")
+                    pass
+            else:
+                logging.debug('no existe cache actual para bd')
+            
+            time.sleep(5)
+
     def stop(self):
         '''Detiene el nodo y cierra todas las conexiones'''
         self.running = False
