@@ -182,7 +182,7 @@ class Node:
         new_boss_port = data.get('port', {})
         new_boss_node_type = data.get('node_type', {})
         
-        self._connect_to_external_boss(new_boss_ip, new_boss_port, new_boss_node_type)
+        self._connect_to_external_boss(new_boss_node_type, new_boss_ip, new_boss_port)
         
         
     def _handle_identification(self, node_connection, message_dict):
