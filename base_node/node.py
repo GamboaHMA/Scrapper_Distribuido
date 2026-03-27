@@ -590,9 +590,32 @@ class Node:
                         self._demote_to_subordinate(client_ip)
             
             else:
-                # No soy jefe, no debería recibir conexiones persistentes
-                logging.debug(f"Cerrando conexión persistente de {sender_node_type} {client_ip} (no soy jefe)")
-                sock.close()
+                # No soy jefe. Verificar si es mi jefe adoptándome (via add_subordinate desde el boss)
+                if is_boss and sender_node_type == self.node_type:
+                    # El jefe de mi tipo me está adoptando como subordinado.
+                    # Crear NodeConnection usando el socket entrante y registrarlo como mi jefe.
+                    logging.info(f"Jefe {client_ip} adoptándome como subordinado. Aceptando conexión...")
+                    conn = NodeConnection(
+                        self.node_type,
+                        client_ip,
+                        data.get('node_port', self.port),
+                        on_message_callback=self._handle_message_from_node,
+                        sender_node_type=self.node_type,
+                        sender_id=self.node_id
+                    )
+                    if conn.connect(existing_socket=sock):
+                        with self.my_boss_profile.lock:
+                            if self.my_boss_profile.connection:
+                                self.my_boss_profile.connection.disconnect()
+                            self.my_boss_profile.set_connection(conn)
+                        logging.info(f"✓ Conectado al jefe {client_ip} via adopción")
+                    else:
+                        logging.error(f"No se pudo aceptar adopción del jefe {client_ip}")
+                        sock.close()
+                else:
+                    # Conexión persistente de tipo inesperado mientras no soy jefe → rechazar
+                    logging.debug(f"Cerrando conexión persistente de {sender_node_type} {client_ip} (no soy jefe)")
+                    sock.close()
     
     def _demote_to_subordinate(self, new_boss_ip):
         """
@@ -1254,17 +1277,26 @@ class Node:
             for node_id in nodes_to_reassign:
                 self.reassign_tasks_from_subordinate(node_id)
         
-        # 3. Verificar conexiones con otros jefes
+        # 3. Verificar conexiones con otros jefes (inter-tipo: scrapper↔db, scrapper↔router, etc.)
         for node_type, conn in list(self.bosses_connections.items()):
             if conn:
                 if not conn.is_connected():
                     boss_ip = conn.ip
+                    boss_port = conn.port
                     logging.warning(f"Jefe {node_type} desconectado")
                     conn.disconnect()
                     del self.bosses_connections[node_type]
-                    # Eliminar de known_nodes
-                    self.remove_node_from_registry(node_type, boss_ip)
-                    logging.info(f"Conexión con jefe de {node_type} cerrada")
+                    logging.info(f"Conexión con jefe de {node_type} cerrada. Reintentando en 3s...")
+
+                    # Reintentar conexión con delay para resolver race condition de
+                    # conexión mutua simultánea al inicio o tras reunificación.
+                    def _retry_external_boss(nt=node_type, bip=boss_ip, bport=boss_port):
+                        time.sleep(3)
+                        if self.running and nt not in self.bosses_connections:
+                            logging.info(f"🔄 Reintentando conexión con jefe externo {nt} ({bip}:{bport})...")
+                            self._connect_to_external_boss(nt, bip, bport)
+
+                    threading.Thread(target=_retry_external_boss, daemon=True).start()
                         
     def reassign_tasks_from_subordinate(self, node_id):
         """
