@@ -219,6 +219,11 @@ class ScrapperNode(Node):
         # Llamar al método base para actualizar cache
         super()._handle_external_bosses_info(node_connection, message_dict)
         
+        # Solo el jefe scrapper necesita conectarse a jefes externos
+        if not self.i_am_boss:
+            logging.debug("No soy jefe, ignorando intento de conectar a jefes externos")
+            return
+        
         # Ahora conectarse a los jefes externos
         data = message_dict.get('data', {})
         bosses_info = data.get('bosses', {})
@@ -895,7 +900,7 @@ class ScrapperNode(Node):
                 {
                     'ip': self.ip,
                     'port': self.port,
-                    'is_boss': self.i_am_boss,
+                    'is_boss': True,  # _connect_to_boss es siempre jefe-a-jefe
                     'is_temporary': False
                 }
             )

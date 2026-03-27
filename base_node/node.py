@@ -88,6 +88,7 @@ class Node:
         # Conexiones persistentes con jefes de otros tipos (cuando soy jefe)
         # {node_id: NodeConnection} donde node_id = f"{node_type}-{ip}:{port}"
         self.bosses_connections = {}
+        self.bosses_connections_lock = threading.Lock()
         
         self.listen_socket = None
         self.listen_thread = None
@@ -1288,25 +1289,34 @@ class Node:
                 self.reassign_tasks_from_subordinate(node_id)
         
         # 3. Verificar conexiones con otros jefes (inter-tipo: scrapper↔db, scrapper↔router, etc.)
-        for node_type, conn in list(self.bosses_connections.items()):
-            if conn:
-                if not conn.is_connected():
-                    boss_ip = conn.ip
-                    boss_port = conn.port
+        # Snapshot fuera del lock para no bloquear demasiado tiempo
+        with self.bosses_connections_lock:
+            snapshot = list(self.bosses_connections.items())
+        
+        for node_type, conn in snapshot:
+            if conn and not conn.is_connected():
+                boss_ip = conn.ip
+                boss_port = conn.port
+                
+                with self.bosses_connections_lock:
+                    # Solo actuar si la conexión en el dict sigue siendo la misma (evitar race con _connect_to_external_boss)
+                    if self.bosses_connections.get(node_type) is not conn:
+                        continue  # Ya fue reemplazada, ignorar
                     logging.warning(f"Jefe {node_type} desconectado")
                     conn.disconnect()
                     del self.bosses_connections[node_type]
-                    logging.info(f"Conexión con jefe de {node_type} cerrada. Reintentando en 3s...")
+                
+                logging.info(f"Conexión con jefe de {node_type} cerrada. Reintentando en 3s...")
 
-                    # Reintentar conexión con delay para resolver race condition de
-                    # conexión mutua simultánea al inicio o tras reunificación.
-                    def _retry_external_boss(nt=node_type, bip=boss_ip, bport=boss_port):
-                        time.sleep(3)
-                        if self.running and nt not in self.bosses_connections:
-                            logging.info(f"🔄 Reintentando conexión con jefe externo {nt} ({bip}:{bport})...")
-                            self._connect_to_external_boss(nt, bip, bport)
+                # Reintentar conexión con delay para resolver race condition de
+                # conexión mutua simultánea al inicio o tras reunificación.
+                def _retry_external_boss(nt=node_type, bip=boss_ip, bport=boss_port):
+                    time.sleep(3)
+                    if self.running and nt not in self.bosses_connections:
+                        logging.info(f"🔄 Reintentando conexión con jefe externo {nt} ({bip}:{bport})...")
+                        self._connect_to_external_boss(nt, bip, bport)
 
-                    threading.Thread(target=_retry_external_boss, daemon=True).start()
+                threading.Thread(target=_retry_external_boss, daemon=True).start()
                         
     def reassign_tasks_from_subordinate(self, node_id):
         """
