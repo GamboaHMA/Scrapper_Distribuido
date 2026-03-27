@@ -1863,7 +1863,7 @@ class Node:
             # self.connect_to_discovered_nodes("bd")
 
             # hilo para que se reconecte con el jefe bd
-            if self.node_type == 'scrapper':
+            if self.node_type == 'scrapper' and self.i_am_boss:
                 threading.Thread(
                     target=self.mantener_conex_con_bd_boss,
                     daemon=True,
