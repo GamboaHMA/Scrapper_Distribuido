@@ -639,7 +639,7 @@ class Node:
         
         # 4. Conectarse al nuevo jefe
         logging.info(f"Conectando al nuevo jefe en {new_boss_ip}:{self.port}...")
-        self._connect_to_boss_as_subordinate(new_boss_ip, self.port)
+        self.connect_to_boss(new_boss_ip)
         
         logging.info(f"✓ Transición completada. Ahora soy subordinado de {new_boss_ip}")
     
