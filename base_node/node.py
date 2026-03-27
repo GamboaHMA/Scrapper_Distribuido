@@ -1901,7 +1901,6 @@ class Node:
                         self.replicate_external_bosses_info()
                         
                         logging.info(f"✓ (reset) Conexión con jefe externo {'bd'} ({self.external_bosses_cache['bd']['ip']}:{self.external_bosses_cache['bd']['port']}) establecida")
-                        break
                     else:
                         logging.error(f"✗ (reset) No se pudo conectar con jefe externo {'bd'} en {self.external_bosses_cache['bd']['ip']}:{self.external_bosses_cache['bd']['port']}")
                 else:
@@ -1911,7 +1910,6 @@ class Node:
                 logging.debug('no existe cache actual para bd')
             
             time.sleep(5)
-        logging.debug("Saliendo de mantener_conex_con_bd_boss")
 
     def stop(self):
         '''Detiene el nodo y cierra todas las conexiones'''
