@@ -1251,6 +1251,7 @@ class RouterNode(Node):
             new_boss_ip,
             self.port,
             identification,
+            expect_response=True,
             timeout=5
         )
         
