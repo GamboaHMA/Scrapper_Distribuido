@@ -108,6 +108,7 @@ class Node:
             MessageProtocol.MESSAGE_TYPES['STATUS_UPDATE']: self._handle_status_update,
             MessageProtocol.MESSAGE_TYPES['EXTERNAL_BOSSES_INFO']: self._handle_external_bosses_info,
             MessageProtocol.MESSAGE_TYPES['NEW_EXTERNAL_BOSS']: self._handle_new_external_boss_persistent,
+            MessageProtocol.MESSAGE_TYPES['NEW_BOSS']: self._handle_new_boss_persistent_message,
             # Agregar más manejadores según los tipos de mensaje necesarios
         }
         self.temporary_message_handler = {
@@ -174,6 +175,15 @@ class Node:
     #     """Procesa mensaje de heartbeat"""
     #     # ya el NodeConnection maneja el update del heartbeat
     #     pass
+        
+    def _handle_new_boss_persistent_message(self, node_connection, message_dict):
+        data = message_dict.get('data', {})
+        new_boss_ip = data.get('ip', {})
+        new_boss_port = data.get('port', {})
+        new_boss_node_type = data.get('node_type', {})
+        
+        self._connect_to_external_boss(new_boss_ip, new_boss_port, new_boss_node_type)
+        
         
     def _handle_identification(self, node_connection, message_dict):
         """Procesa mensaje de identificación"""

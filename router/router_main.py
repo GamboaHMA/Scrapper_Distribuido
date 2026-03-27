@@ -1218,7 +1218,7 @@ class RouterNode(Node):
         self.i_am_boss = False
         self.stop_boss_tasks()
         
-        # 3. Desconectar subordinados
+        # 3. Desconectar subordinados, clientes y jefes externos (BD y Scrapper)
         with self.subordinates_lock:
             for conn in list(self.subordinates.values()):
                 try:
@@ -1227,7 +1227,36 @@ class RouterNode(Node):
                     pass
             self.subordinates.clear()
         
-        logging.info("Subordinados desconectados y tareas de jefe detenidas")
+        logging.info("Subordinados desconectados.")
+        
+        for boss_type, boss_profile in self.external_bosses.items():
+            if boss_profile.is_connected():
+                boss_profile.connection.send_message(self._create_message(
+                    MessageProtocol.MESSAGE_TYPES['NEW_BOSS'],
+                    {
+                        'ip': new_boss_ip,
+                        'port': self.port,  # Mismo puerto que yo
+                        'node_type': self.node_type
+                    }
+                ))
+                try:
+                    boss_profile.connection.disconnect()
+                except:
+                    pass
+                boss_profile.clear_connection()
+                
+                
+        
+        with self.clients_lock:
+            for conn in list(self.connected_clients.values()):
+                try:
+                    conn.disconnect()
+                except:
+                    pass
+            self.connected_clients.clear()
+        
+        logging.info("Clientes desconectados.")
+        #Actualizar cache de jefes externos
         
         # 4. Guardar IP del nuevo jefe
         self.my_boss_ip = new_boss_ip
