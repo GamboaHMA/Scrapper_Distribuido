@@ -286,8 +286,10 @@ class RouterNode(Node):
                     boss_profile.set_connection(node_connection)
                     logging.info(f"✓ Jefe externo {sender_node_type} conectado vía conexión entrante")
                 else:
-                    logging.debug(f"Jefe externo {sender_node_type} ya tiene conexión activa")
-
+                    logging.debug(f"Ya existe una conexión activa con el jefe externo {sender_node_type}")
+                    logging.debug(f"Sustituyendo conexión activa con el jefe externo {sender_node_type}")
+                    boss_profile.clear_connection()
+                    boss_profile.set_connection(node_connection)
 
         
     def _handle_identification_incoming(self, sock, client_ip, message):

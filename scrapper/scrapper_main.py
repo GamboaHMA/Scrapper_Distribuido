@@ -931,7 +931,7 @@ class ScrapperNode(Node):
         self._start_task_assignment_thread()
         
         # Loop de reunificación: detecta otros jefes scrapper cuando la red se reconecta
-        threading.Thread(target=self._scrapper_reunification_loop, daemon=True, name="ScrapperReunification").start()
+        # threading.Thread(target=self._scrapper_reunification_loop, daemon=True, name="ScrapperReunification").start()
         
         logging.info("✓ Jefe Scrapper operativo")
     

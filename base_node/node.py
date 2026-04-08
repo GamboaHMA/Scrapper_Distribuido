@@ -414,6 +414,8 @@ class Node:
         new_boss_port = data.get('port')
         new_boss_type = data.get('node_type')
         
+        logging.debug(f"📥 NEW_BOSS_NO_ROUTER recibido de {new_boss_ip}:{new_boss_port}")
+        
         # Mandar mensaje BOSS_NO_ROUTER_REUNIFICATION temporal
         message = self._create_message(MessageProtocol.MESSAGE_TYPES['BOSS_NO_ROUTER_REUNIFICATION'],
                                        {
