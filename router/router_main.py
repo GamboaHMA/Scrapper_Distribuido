@@ -206,15 +206,18 @@ class RouterNode(Node):
     def _handle_boss_no_router_reunification(self, sock, client_ip, message):
         logging.info(f"Boss no router reunification message received from {client_ip}: {message}")
         
-        sender_id = message.get('sender_id', 'unknown')
+        data = message.get('data', {})
+        sender_ip = message.get('ip', 'unknown')
+        sender_port = message.get('port', 'unknown')
         sender_node_type = message.get('node_type', 'unknown')
         data = message.get('data', {})
         node_type = data.get('node_type', None)
+        
         # Dos casos: ya tengo jefe de este node_type o no tengo jefe de este node_type
-        if node_type in self.bosses_connections:
-            logging.info(f"Ya tengo jefe de tipo {node_type}, enviando información sobre el jefe existente a {sender_id}")
+        if node_type in self.external_bosses:
+            logging.info(f"Ya tengo jefe de tipo {node_type}, enviando información sobre el jefe existente a {sender_ip}")
             # Enviar información sobre el jefe existente al nodo que intenta reunificarse
-            existing_boss_connection = self.bosses_connections.get(node_type)
+            existing_boss_connection = self.external_bosses[node_type].get_connection()
             if existing_boss_connection:
                 response = self._create_message(
                     MessageProtocol.MESSAGE_TYPES['BOSS_NO_ROUTER_REUNIFICATION'],

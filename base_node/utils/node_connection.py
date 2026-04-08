@@ -349,6 +349,7 @@ class NodeConnection:
     
     def disconnect(self):
         """Cierra la conexión con el nodo"""
+        time.sleep(1)
         with self.connection_lock:
             if not self.connected:
                 return

@@ -1344,7 +1344,6 @@ class Node:
                         if conn:
                             logging.info(f"Desconectando subordinado muerto: {node_id}")
                             conn.disconnect()
-                            
                             nodes_to_reassign.append(node_id)
                             
                             del self.subordinates[node_id]
