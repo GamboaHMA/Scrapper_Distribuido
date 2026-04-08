@@ -1565,8 +1565,24 @@ class DatabaseNode(Node):
                 self._send_bd_query_response(node_connection, task_id, found=False)
                 return
 
-            # Hay contenido disponible, pedir a un subordinado
+            # Hay contenido disponible — comprobar si el jefe mismo tiene el contenido
             subordinate_id = databases_with_content[0][0]
+
+            if subordinate_id == self.node_id:
+                # El contenido está en el propio jefe: leer directamente de la tabla local
+                logging.info(f"El contenido está en el jefe mismo ({self.node_id}), leyendo localmente")
+                with self.db_lock:
+                    self.db_cursor.execute('SELECT content FROM urls WHERE url_id = ?', (url_id,))
+                    content_row = self.db_cursor.fetchone()
+                if content_row and content_row[0]:
+                    import json
+                    result = json.loads(content_row[0])
+                    self._send_bd_query_response(node_connection, task_id, found=True, result=result)
+                else:
+                    logging.warning(f"Contenido vacío para url_id={url_id}, responder negativo")
+                    self._send_bd_query_response(node_connection, task_id, found=False)
+                return
+
             logging.info(f"Solicitando contenido de URL al subordinado {subordinate_id}")
             
             # Buscar conexión con el subordinado
