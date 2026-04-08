@@ -694,7 +694,7 @@ class RouterNode(Node):
         
         logging.info(f"🔍 Iniciando búsqueda periódica del jefe {node_type}...")
         
-        while self.running:
+        while self.running and self.i_am_boss:
             # Si ya estamos conectados, monitorear la conexión
             if boss_profile.is_connected():
                 logging.debug(f"Jefe {node_type} conectado, monitoreando...")
