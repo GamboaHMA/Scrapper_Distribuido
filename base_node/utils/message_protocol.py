@@ -45,6 +45,8 @@ class MessageProtocol:
         
         # EXTERNAL BOSS COORDINATION (Nuevo jefe -> Jefe externo)
         'NEW_EXTERNAL_BOSS': 'new_external_boss',
+        'NEW_BOSS_NO_ROUTER': 'new_boss_no_router',
+        'BOSS_NO_ROUTER_REUNIFICATION': 'boss_no_router_reunification',
         
         # DATABASE COMMUNICATION
         'SAVE_DATA': 'save_data',

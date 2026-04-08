@@ -196,8 +196,100 @@ class RouterNode(Node):
             self._handle_bd_response_temporary
         )
         
+        self.add_temporary_message_handler(
+            MessageProtocol.MESSAGE_TYPES['BOSS_NO_ROUTER_REUNIFICATION'],
+            self._handle_boss_no_router_reunification
+        )
+
         logging.debug("Handlers del router registrados")
-    
+        
+    def _handle_boss_no_router_reunification(self, sock, client_ip, message):
+        logging.info(f"Boss no router reunification message received from {client_ip}: {message}")
+        
+        sender_id = message.get('sender_id', 'unknown')
+        sender_node_type = message.get('node_type', 'unknown')
+        data = message.get('data', {})
+        node_type = data.get('node_type', None)
+        # Dos casos: ya tengo jefe de este node_type o no tengo jefe de este node_type
+        if node_type in self.bosses_connections:
+            logging.info(f"Ya tengo jefe de tipo {node_type}, enviando información sobre el jefe existente a {sender_id}")
+            # Enviar información sobre el jefe existente al nodo que intenta reunificarse
+            existing_boss_connection = self.bosses_connections.get(node_type)
+            if existing_boss_connection:
+                response = self._create_message(
+                    MessageProtocol.MESSAGE_TYPES['BOSS_NO_ROUTER_REUNIFICATION'],
+                    {
+                        'ip': existing_boss_connection.ip,
+                        'port': existing_boss_connection.port,
+                        'node_type': node_type,
+                        'accepted': False
+                    }
+                )
+                # Enviar al sender la informacion de mi jefe de tipo node_type
+                try:
+                    response_bytes = json.dumps(response).encode()
+                    sock.sendall(len(response_bytes).to_bytes(2, 'big'))
+                    sock.sendall(response_bytes)
+                    logging.info(f"Información del jefe existente {node_type} ({existing_boss_connection.ip}:{existing_boss_connection.port}) enviada a {client_ip}")
+                except Exception as e:
+                    logging.error(f"Error enviando info de jefe existente a {client_ip}: {e}")
+                finally:
+                    sock.close()
+
+            
+        else:
+            logging.info(f"No tengo jefe de tipo {node_type}, agregando información")
+            self.external_bosses_cache[node_type] = {
+                'port': data.get('port'),
+                'ip': data.get('ip'),
+            }
+            # Notificar al nodo q lo acepto como jefe de tipo node_type
+            logging.info(f"Notificando al nodo {sender_id} que lo acepto como jefe de tipo {node_type}")
+            response = self._create_message(
+                MessageProtocol.MESSAGE_TYPES['BOSS_NO_ROUTER_REUNIFICATION'],
+                {
+                    'ip': data.get('ip'),
+                    'port': data.get('port'),
+                    'node_type': node_type,
+                    'accepted': True
+                }
+            )
+            try:
+                response_bytes = json.dumps(response).encode()
+                sock.sendall(len(response_bytes).to_bytes(2, 'big'))
+                sock.sendall(response_bytes)
+                logging.info(f"Notificación enviada al nodo {sender_id} aceptando como jefe de tipo {node_type}")
+            except Exception as e:
+                logging.error(f"Error enviando notificación al nodo {sender_id}: {e}")
+            finally:
+                sock.close()
+                
+            # Crear node_connection con el nodo
+            node_connection = NodeConnection(
+                node_type=node_type,
+                ip=data.get('ip'),
+                port=data.get('port'),
+                on_message_callback=self._handle_message_from_node,
+                sender_node_type=self.node_type,
+                sender_id=self.node_id
+            )
+            if not node_connection.connect(existing_socket=sock):
+                logging.error(f"No se pudo establecer conexión persistente con nodo {sender_id}")
+                return
+            with self.bosses_connections_lock:
+                self.bosses_connections[node_type] = node_connection
+            logging.info(f"Conexión persistente establecida con nodo {sender_id} como jefe de tipo {node_type}")
+            
+            if sender_node_type in self.external_bosses:
+                boss_profile = self.external_bosses[sender_node_type]
+                if not boss_profile.is_connected():
+                    boss_profile.set_connection(node_connection)
+                    logging.info(f"✓ Jefe externo {sender_node_type} conectado vía conexión entrante")
+                else:
+                    logging.debug(f"Jefe externo {sender_node_type} ya tiene conexión activa")
+
+
+        
     def _handle_identification_incoming(self, sock, client_ip, message):
         """
         Sobrescribe handler de identificación entrante para interceptar clientes.
@@ -1230,9 +1322,9 @@ class RouterNode(Node):
         logging.info("Subordinados desconectados.")
         
         for boss_type, boss_profile in self.external_bosses.items():
-            if boss_profile.is_connected():
+            if boss_profile.is_connected(): 
                 boss_profile.connection.send_message(self._create_message(
-                    MessageProtocol.MESSAGE_TYPES['NEW_BOSS'],
+                    MessageProtocol.MESSAGE_TYPES['NEW_BOSS_NO_ROUTER'],
                     {
                         'ip': new_boss_ip,
                         'port': self.port,  # Mismo puerto que yo

@@ -1,3 +1,4 @@
+from operator import ne
 import socket
 import json
 import time
@@ -110,6 +111,7 @@ class Node:
             MessageProtocol.MESSAGE_TYPES['EXTERNAL_BOSSES_INFO']: self._handle_external_bosses_info,
             MessageProtocol.MESSAGE_TYPES['NEW_EXTERNAL_BOSS']: self._handle_new_external_boss_persistent,
             MessageProtocol.MESSAGE_TYPES['NEW_BOSS']: self._handle_new_boss_persistent_message,
+            MessageProtocol.MESSAGE_TYPES['NEW_BOSS_NO_ROUTER']: self._handle_new_boss_no_router_persistent,
             # Agregar más manejadores según los tipos de mensaje necesarios
         }
         self.temporary_message_handler = {
@@ -398,6 +400,77 @@ class Node:
             
             logging.info(f"Nuevo jefe externo {new_boss_type} notificado: {new_boss_ip}:{new_boss_port}")
             self._connect_to_external_boss(new_boss_type, new_boss_ip, new_boss_port)
+            
+    def _handle_new_boss_no_router_persistent(self, node_connection, message_dict):
+        """
+        Handler persistente para NEW_BOSS_NO_ROUTER.
+        
+        Args:
+            node_connection: Conexión persistente desde la que viene el mensaje
+            message_dict: Dict con el mensaje completo
+        """
+        data = message_dict.get('data', {})
+        new_boss_ip = data.get('ip')
+        new_boss_port = data.get('port')
+        new_boss_type = data.get('node_type')
+        
+        # Mandar mensaje BOSS_NO_ROUTER_REUNIFICATION temporal
+        message = self._create_message(MessageProtocol.MESSAGE_TYPES['BOSS_NO_ROUTER_REUNIFICATION'],
+                                       {
+                                           'ip': self.ip,
+                                           'port': self.port,
+                                           'node_type': self.node_type
+                                       }
+        )
+        response = self.send_temporary_message(
+            new_boss_ip,
+            new_boss_port,
+            message,
+            expect_response=True
+        )
+        if response:
+            accepted = response.get('data', {}).get('accepted', False)
+            new_boss_ip = response.get('data', {}).get('ip', None)
+            new_boss_port = response.get('data', {}).get('port', None)
+            new_boss_node_type = response.get('data', {}).get('node_type', None)
+            
+            if accepted:
+                logging.info(f"Fui aceptado por {new_boss_ip}:{new_boss_port} como jefe de tipo {new_boss_node_type}")
+                # Crear node connection con el new_boss y mantenerme como jefe
+                conn = NodeConnection(
+                    self.node_type,
+                    new_boss_ip,
+                    new_boss_port,
+                    on_message_callback=self._handle_message_from_node,
+                    sender_node_type=self.node_type,
+                    sender_id=self.node_id
+                )
+                if conn.connect():
+                    self.bosses_connections[new_boss_node_type] = conn
+                    logging.info(f"Conexión establecida con nuevo jefe {new_boss_node_type} en {new_boss_ip}:{new_boss_port}")
+
+            else:
+                logging.info(f"Nodo {new_boss_ip}:{new_boss_port} no aceptado como jefe de tipo {self.node_type}")
+                # Si no fui aceptado, el me mando info de su jefe scrapper
+                # Debo asumir ese jefe scrapper como mi jefe y comunicarlo a mis subordinados
+                
+                #Mensaje para mis subordinados
+                subordinates_message = self._create_message(
+                    MessageProtocol.MESSAGE_TYPES['NEW_BOSS'],
+                    {
+                        'ip': new_boss_ip,
+                        'port': new_boss_port,
+                        'node_type': new_boss_node_type
+                    }
+                )
+                self.broadcast_to_subordinates(subordinates_message)
+                self.stop_boss_tasks()
+
+                # Asumir el nuevo jefe scrapper
+                if new_boss_ip and new_boss_port:
+                    logging.info(f"Asumiendo nuevo jefe scrapper {new_boss_ip}:{new_boss_port}")
+                    self._connect_to_external_boss(new_boss_node_type, new_boss_ip, new_boss_port)
+
     
     def _connect_to_external_boss(self, boss_type, boss_ip, boss_port):
         """
