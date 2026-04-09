@@ -786,7 +786,7 @@ class RouterNode(Node):
             node_type: Tipo de nodo a buscar ('bd' o 'scrapper')
         """
         retry_interval = 5  # segundos entre intentos de búsqueda
-        wait_after_disconnect = 15  # segundos de espera tras desconexión (para dar tiempo a nuevo jefe)
+        wait_after_disconnect = 13  # segundos de espera tras desconexión (para dar tiempo a nuevo jefe)
         boss_profile = self.external_bosses[node_type]
         
         logging.info(f"🔍 Iniciando búsqueda periódica del jefe {node_type}...")

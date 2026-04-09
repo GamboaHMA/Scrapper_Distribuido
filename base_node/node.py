@@ -468,9 +468,9 @@ class Node:
                 self.broadcast_to_subordinates(subordinates_message)
                 self.stop_boss_tasks()
 
-                # Asumir el nuevo jefe scrapper
+                # Asumir el nuevo jefe
                 if new_boss_ip and new_boss_port:
-                    logging.info(f"Asumiendo nuevo jefe scrapper {new_boss_ip}:{new_boss_port}")
+                    logging.info(f"Asumiendo nuevo jefe {new_boss_node_type} {new_boss_ip}:{new_boss_port}")
                     self._connect_to_external_boss(new_boss_node_type, new_boss_ip, new_boss_port)
 
     
@@ -1368,7 +1368,7 @@ class Node:
                 # conexión mutua simultánea al inicio o tras reunificación.
                 def _retry_external_boss(nt=node_type, bip=boss_ip, bport=boss_port):
                     time.sleep(3)
-                    if self.running and nt not in self.bosses_connections:
+                    if self.running and nt not in self.bosses_connections and self.i_am_boss:
                         logging.info(f"🔄 Reintentando conexión con jefe externo {nt} ({bip}:{bport})...")
                         self._connect_to_external_boss(nt, bip, bport)
 
@@ -1691,6 +1691,7 @@ class Node:
         - BD: Detener consolidación y balanceo de réplicas
         """
         logging.info("Deteniendo tareas de jefe (implementación base - sin tareas)")
+        self.i_am_boss = False  # Asegurar que el estado de jefe se actualice
         # Implementación base: no hace nada
         # Las subclases deben sobrescribir este método
         pass

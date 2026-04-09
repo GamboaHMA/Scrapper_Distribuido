@@ -61,7 +61,7 @@ class NodeConnection:
         self.estado = "desconectado"  # "desconectado", "conectado", "ocupado"
         self.metadata = {}  # Diccionario para datos adicionales
         
-        self.heartbeat_timeout = 60  # Segundos para timeout de heartbeat
+        self.heartbeat_timeout = 15  # Segundos para timeout de heartbeat
         
         logging.debug(f"NodeConnection creada para {self.node_id}")
     
@@ -146,7 +146,7 @@ class NodeConnection:
                 if time_since_last is not None and int(time_since_last) % 60 == 0:
                     logging.debug(f"💓 HeartbeatMonitor: {self.node_id} - último heartbeat hace {time_since_last:.1f}s")
                 
-                time.sleep(10)  # Esperar 10 segundos antes de chequear de nuevo
+                time.sleep(8)  # Esperar 8 segundos antes de chequear de nuevo
         
         threading.Thread(
             target=heartbeat_monitor,
@@ -160,11 +160,11 @@ class NodeConnection:
             # Esperar un poco para que la conexión se establezca completamente
             # pero no tanto como para causar timeout en el otro extremo
             time.sleep(2)
-            logging.info(f"💗 HeartbeatSender iniciado para {self.node_id} (intervalo: 15s)")
+            logging.info(f"💗 HeartbeatSender iniciado para {self.node_id} (intervalo: 10s)")
             
             while self.connected and not self.heartbeat_thread_stop_event.is_set():
                 self.send_heartbeat()
-                time.sleep(15)  # Enviar heartbeat cada 15 segundos
+                time.sleep(10)  # Enviar heartbeat cada 10 segundos
         
         threading.Thread(
             target=heartbeat_sender,
