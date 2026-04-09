@@ -134,13 +134,6 @@ class DatabaseNode(Node):
             name="bd-subordinates-monitor"
         ).start()
         
-        # Iniciar barrido periódico para reparar URLs bajo-replicadas
-        threading.Thread(
-            target=self._periodic_replication_repair,
-            daemon=True,
-            name="bd-replication-repair"
-        ).start()
-        
         logging.info("Tareas de jefe BD iniciadas correctamente")
     
     def stop_boss_tasks(self):
@@ -190,111 +183,6 @@ class DatabaseNode(Node):
                         
             except Exception as e:
                 logging.error(f"Error en monitor de subordinados: {e}")
-                import traceback
-                traceback.print_exc()
-
-    def _periodic_replication_repair(self):
-        """
-        Barrido periódico que detecta URLs con menos réplicas de las necesarias
-        y las replica a nodos disponibles sin tener que esperar eventos de reconexión.
-        Esto cubre casos donde _replicate_to_new_subordinate pudo haber fallado.
-        """
-        repair_interval = 60  # Verificar cada 60 segundos
-        
-        logging.info("Barrido periódico de reparación de réplicas iniciado")
-        
-        while self.running and self.i_am_boss:
-            time.sleep(repair_interval)
-            
-            if not self.i_am_boss:
-                break
-            
-            try:
-                with self.subordinates_lock:
-                    all_nodes = list(self.subordinates.keys()) + [self.node_id]
-                
-                if len(all_nodes) < 2:
-                    continue  # Sin subordinados no podemos replicar
-                
-                # Buscar URLs que tienen menos réplicas de las necesarias
-                with self.db_lock:
-                    self.db_cursor.execute('''
-                        SELECT u.url_id, u.url, u.content,
-                               COUNT(DISTINCT udl.node_id) AS real_replicas
-                        FROM urls u
-                        LEFT JOIN url_db_log udl ON u.url_id = udl.url_id
-                        WHERE u.content IS NOT NULL
-                        GROUP BY u.url_id
-                        HAVING real_replicas < 3
-                    ''')
-                    under_replicated = self.db_cursor.fetchall()
-                
-                if not under_replicated:
-                    continue
-                
-                logging.info(f"[REPAIR] Encontradas {len(under_replicated)} URLs bajo-replicadas")
-                
-                for url_id, url, content_json, real_replicas in under_replicated:
-                    if not self.i_am_boss:
-                        break
-                    try:
-                        # Obtener nodos que ya tienen esta URL
-                        with self.db_lock:
-                            self.db_cursor.execute(
-                                'SELECT node_id FROM url_db_log WHERE url_id = ?', (url_id,)
-                            )
-                            nodes_with_url = {row[0] for row in self.db_cursor.fetchall()}
-                        
-                        # Nodos disponibles que no tienen la URL
-                        available = [n for n in all_nodes if n not in nodes_with_url]
-                        needed = 3 - real_replicas
-                        
-                        if not available:
-                            continue
-                        
-                        import random, json
-                        targets = random.sample(available, min(needed, len(available)))
-                        result = json.loads(content_json)
-                        
-                        for target_node_id in targets:
-                            if target_node_id == self.node_id:
-                                continue  # El jefe ya tiene el contenido si llegó aquí
-                            
-                            with self.subordinates_lock:
-                                target_conn = self.subordinates.get(target_node_id)
-                            
-                            if not target_conn:
-                                continue
-                            
-                            replicate_msg = self._create_message(
-                                MessageProtocol.MESSAGE_TYPES['SAVE_DATA_NO_LEADER'],
-                                {'url': url, 'result': result, 'task_id': f'repair-{url_id}'}
-                            )
-                            target_conn.send_message(replicate_msg)
-                            
-                            with self.db_lock:
-                                self.db_cursor.execute('''
-                                    INSERT OR IGNORE INTO url_db_log (url_id, node_id)
-                                    VALUES (?, ?)
-                                ''', (url_id, target_node_id))
-                                self.db_cursor.execute('''
-                                    SELECT COUNT(DISTINCT node_id) FROM url_db_log WHERE url_id = ?
-                                ''', (url_id,))
-                                new_count = self.db_cursor.fetchone()[0]
-                                self.db_cursor.execute(
-                                    'UPDATE urls SET current_replicas = ? WHERE url_id = ?',
-                                    (new_count, url_id)
-                                )
-                                self.db_conn.commit()
-                            
-                            logging.info(f"[REPAIR] URL {url} replicada a {target_node_id} (réplicas: {new_count})")
-                    
-                    except Exception as e:
-                        logging.error(f"[REPAIR] Error reparando url_id={url_id}: {e}")
-                        continue
-                
-            except Exception as e:
-                logging.error(f"[REPAIR] Error en barrido periódico: {e}")
                 import traceback
                 traceback.print_exc()
 
@@ -1182,12 +1070,9 @@ class DatabaseNode(Node):
                                         VALUES (?, ?)
                                     ''', (url_id, target_node_id))
                                     self.db_cursor.execute('''
-                                        SELECT COUNT(DISTINCT node_id) FROM url_db_log WHERE url_id = ?
+                                        UPDATE urls SET current_replicas = current_replicas + 1
+                                        WHERE url_id = ?
                                     ''', (url_id,))
-                                    new_count = self.db_cursor.fetchone()[0]
-                                    self.db_cursor.execute('''
-                                        UPDATE urls SET current_replicas = ? WHERE url_id = ?
-                                    ''', (new_count, url_id))
                                     self.db_conn.commit()
                                 replicas_added += 1
                                 logging.info(f"   → URL {url} replicada a {target_node_id}")
@@ -1478,17 +1363,13 @@ class DatabaseNode(Node):
             
             logging.info(f"[REPLICATE_NEW_SUB] Iniciando replicación hacia nuevo subordinado {new_subordinate_id}")
             
-            # Obtener todas las URLs que el nuevo subordinado aún no tiene (con db_lock)
-            with self.db_lock:
-                self.db_cursor.execute('''
-                    SELECT url_id, url
-                    FROM urls
-                    WHERE content IS NOT NULL
-                      AND url_id NOT IN (
-                          SELECT url_id FROM url_db_log WHERE node_id = ?
-                      )
-                ''', (new_subordinate_id,))
-                urls_needing_replication = self.db_cursor.fetchall()
+            # Obtener todas las URLs que necesitan más réplicas
+            self.db_cursor.execute('''
+                SELECT url_id, url
+                FROM urls
+                WHERE current_replicas < target_replicas
+            ''')
+            urls_needing_replication = self.db_cursor.fetchall()
             
             if not urls_needing_replication:
                 logging.info(f"[REPLICATE_NEW_SUB] No hay URLs que necesiten replicación")
@@ -1500,75 +1381,71 @@ class DatabaseNode(Node):
             replicated_count = 0
             for url_id, url in urls_needing_replication:
                 try:
-                    # Obtener contenido y verificar que el sub sigue sin tenerlo (con db_lock)
-                    with self.db_lock:
-                        # Verificar si el nuevo subordinado ya tiene esta URL
-                        self.db_cursor.execute('''
-                            SELECT 1 FROM url_db_log 
-                            WHERE url_id = ? AND node_id = ?
-                        ''', (url_id, new_subordinate_id))
-                        if self.db_cursor.fetchone():
-                            continue
-                        
-                        # Obtener el contenido directamente de la tabla urls
-                        self.db_cursor.execute('''
-                            SELECT content, scrapped_at
-                            FROM urls
-                            WHERE url_id = ?
-                        ''', (url_id,))
-                        content_row = self.db_cursor.fetchone()
+                    # Verificar si el nuevo subordinado ya tiene esta URL
+                    self.db_cursor.execute('''
+                        SELECT 1 FROM url_db_log 
+                        WHERE url_id = ? AND node_id = ?
+                    ''', (url_id, new_subordinate_id))
                     
+                    if self.db_cursor.fetchone():
+                        # Ya tiene la URL, saltar
+                        continue
+                    
+                    # Obtener el contenido directamente de la tabla urls
+                    self.db_cursor.execute('''
+                        SELECT content, scrapped_at
+                        FROM urls
+                        WHERE url_id = ?
+                    ''', (url_id,))
+                    
+                    content_row = self.db_cursor.fetchone()
                     if not content_row:
                         logging.warning(f"[REPLICATE_NEW_SUB] No se encontró contenido para url_id={url_id}")
                         continue
                     
                     content_json, scrapped_at = content_row
                     
-                    # Obtener conexión al subordinado (fuera de db_lock para evitar deadlock)
+                    # Enviar contenido al nuevo subordinado
                     with self.subordinates_lock:
-                        subordinate_conn = self.subordinates.get(new_subordinate_id)
-                    
-                    if not subordinate_conn:
-                        logging.warning(f"[REPLICATE_NEW_SUB] Subordinado {new_subordinate_id} ya no está conectado")
-                        break
-                    
-                    import json
-                    result = json.loads(content_json)
-                    
-                    # Enviar mensaje (fuera de ambos locks para no bloquear)
-                    replicate_msg = self._create_message(
-                        MessageProtocol.MESSAGE_TYPES['SAVE_DATA_NO_LEADER'],
-                        {
-                            'url': url,
-                            'result': result,
-                            'completed_at': scrapped_at,
-                            'task_id': f'replicate-{url_id}'
-                        }
-                    )
-                    subordinate_conn.send_message(replicate_msg)
-                    
-                    # Actualizar url_db_log y contador de réplicas (con db_lock)
-                    with self.db_lock:
-                        self.db_cursor.execute('''
-                            INSERT OR IGNORE INTO url_db_log (url_id, node_id)
-                            VALUES (?, ?)
-                        ''', (url_id, new_subordinate_id))
-                        
-                        # Recalcular contador real de réplicas
-                        self.db_cursor.execute('''
-                            SELECT COUNT(DISTINCT node_id) FROM url_db_log
-                            WHERE url_id = ?
-                        ''', (url_id,))
-                        replica_count = self.db_cursor.fetchone()[0]
-                        self.db_cursor.execute('''
-                            UPDATE urls 
-                            SET current_replicas = ?
-                            WHERE url_id = ?
-                        ''', (replica_count, url_id))
-                        self.db_conn.commit()
-                    
-                    replicated_count += 1
-                    logging.info(f"[REPLICATE_NEW_SUB] URL {url} replicada a {new_subordinate_id} (total réplicas: {replica_count})")
+                        if new_subordinate_id in self.subordinates:
+                            subordinate_conn = self.subordinates[new_subordinate_id]
+                            
+                            import json
+                            result = json.loads(content_json)
+                            
+                            # Usar SAVE_DATA_NO_LEADER para que el subordinado guarde
+                            replicate_msg = self._create_message(
+                                MessageProtocol.MESSAGE_TYPES['SAVE_DATA_NO_LEADER'],
+                                {
+                                    'url': url,
+                                    'result': result,
+                                    'completed_at': scrapped_at,
+                                    'task_id': f'replicate-{url_id}'
+                                }
+                            )
+                            
+                            subordinate_conn.send_message(replicate_msg)
+                            
+                            # Registrar en url_db_log con node_id
+                            self.db_cursor.execute('''
+                                INSERT INTO url_db_log (url_id, node_id, added_at)
+                                VALUES (?, ?, datetime('now'))
+                            ''', (url_id, new_subordinate_id))
+                            
+                            # Actualizar contador de réplicas
+                            self.db_cursor.execute('''
+                                UPDATE urls 
+                                SET current_replicas = current_replicas + 1
+                                WHERE url_id = ?
+                            ''', (url_id,))
+                            
+                            self.db_conn.commit()
+                            replicated_count += 1
+                            
+                            logging.info(f"[REPLICATE_NEW_SUB] URL {url} replicada a {new_subordinate_id}")
+                        else:
+                            logging.warning(f"[REPLICATE_NEW_SUB] Subordinado {new_subordinate_id} ya no está conectado")
+                            break
                 
                 except Exception as e:
                     logging.error(f"[REPLICATE_NEW_SUB] Error replicando url_id={url_id}: {e}")
@@ -1706,41 +1583,41 @@ class DatabaseNode(Node):
     def _register_url_in_subordinates(self, url, node_ids):
         '''Registra en las tablas de log que ciertos subordinados tienen el contenido de una URL'''
         try:
-            with self.db_lock:
-                # Insertar URL en tabla urls si no existe
-                self.db_cursor.execute('INSERT OR IGNORE INTO urls (url) VALUES (?)', (url,))
-                self.db_conn.commit()
+            # Insertar URL en tabla urls si no existe
+            self.db_cursor.execute('INSERT OR IGNORE INTO urls (url) VALUES (?)', (url,))
+            self.db_conn.commit()
 
-                # Obtener url_id
-                self.db_cursor.execute('SELECT url_id FROM urls WHERE url = ?', (url,))
-                url_id_row = self.db_cursor.fetchone()
-                if not url_id_row:
-                    raise Exception(f"No se pudo obtener url_id para {url}")
-                url_id = url_id_row[0]
+            # Obtener url_id
+            self.db_cursor.execute('SELECT url_id FROM urls WHERE url = ?', (url,))
+            url_id_row = self.db_cursor.fetchone()
+            if not url_id_row:
+                raise Exception(f"No se pudo obtener url_id para {url}")
+            url_id = url_id_row[0]
 
-                # Registrar en url_db_log cada subordinado que tiene el contenido
-                for node_id in node_ids:
-                    self.db_cursor.execute('''
-                        INSERT OR IGNORE INTO url_db_log (url_id, node_id)
-                        VALUES (?, ?)
-                    ''', (url_id, node_id))
-                
-                self.db_conn.commit()
-
-                # Actualizar contador de réplicas consultando cuántos nodos tienen realmente el contenido
+            # Registrar en url_db_log cada subordinado que tiene el contenido
+            for node_id in node_ids:
+                # Registrar directamente con node_id (ya no necesitamos database_id)
                 self.db_cursor.execute('''
-                    SELECT COUNT(DISTINCT node_id)
-                    FROM url_db_log
-                    WHERE url_id = ?
-                ''', (url_id,))
-                actual_replicas = self.db_cursor.fetchone()[0]
-                
-                self.db_cursor.execute('''
-                    UPDATE urls
-                    SET current_replicas = ?, target_replicas = 3
-                    WHERE url_id = ?
-                ''', (actual_replicas, url_id))
-                self.db_conn.commit()
+                    INSERT OR IGNORE INTO url_db_log (url_id, node_id)
+                    VALUES (?, ?)
+                ''', (url_id, node_id))
+            
+            self.db_conn.commit()
+
+            # Actualizar contador de réplicas consultando cuántos nodos tienen realmente el contenido
+            self.db_cursor.execute('''
+                SELECT COUNT(DISTINCT node_id)
+                FROM url_db_log
+                WHERE url_id = ?
+            ''', (url_id,))
+            actual_replicas = self.db_cursor.fetchone()[0]
+            
+            self.db_cursor.execute('''
+                UPDATE urls
+                SET current_replicas = ?, target_replicas = 3
+                WHERE url_id = ?
+            ''', (actual_replicas, url_id))
+            self.db_conn.commit()
 
             logging.info(f"Líder BD registró URL {url} en {len(node_ids)} subordinados: {node_ids} (total réplicas: {actual_replicas})")
         
@@ -2068,8 +1945,6 @@ class DatabaseNode(Node):
             return
         
         # Seleccionar hasta 2 subordinados más (el jefe ya cuenta como 1 réplica)
-        # Si hay más de 2 subordinados, intentar hasta 2 más para llegar a 3 réplicas total.
-        # Si hay menos, se usarán todos los disponibles.
         random.shuffle(subordinados)
         selected_subordinates = subordinados[:2]
 
