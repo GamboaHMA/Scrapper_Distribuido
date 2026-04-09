@@ -679,14 +679,20 @@ class DatabaseNode(Node):
                     
                     if existing:
                         url_id = existing[0]
-                        # Si esta URL ya existe pero no tiene contenido, actualizarlo
+                        # Actualizar contenido si el nuevo es más reciente
                         if content is not None:
                             self.db_cursor.execute('''
                                 UPDATE urls 
-                                SET content = COALESCE(content, ?),
-                                    scrapped_at = COALESCE(scrapped_at, ?)
+                                SET content = CASE 
+                                        WHEN scrapped_at IS NULL OR ? > scrapped_at THEN ?
+                                        ELSE content
+                                    END,
+                                    scrapped_at = CASE
+                                        WHEN scrapped_at IS NULL OR ? > scrapped_at THEN ?
+                                        ELSE scrapped_at
+                                    END
                                 WHERE url_id = ?
-                            ''', (content, scrapped_at, url_id))
+                            ''', (scrapped_at, content, scrapped_at, scrapped_at, url_id))
                     else:
                         # Insertar nueva URL con contenido
                         self.db_cursor.execute('''
@@ -920,8 +926,43 @@ class DatabaseNode(Node):
             logging.info(f"  - Duplicados encontrados: {duplicates_found}")
             logging.info(f"  - Actualizaciones realizadas: {updates_needed}")
             logging.info("=" * 60)
+
+            # 5.5: Asegurar que el jefe tenga el contenido más reciente de TODAS las URLs en su tabla local.
+            # Esto es necesario para URLs que viven exclusivamente en un subordinado (ej. partición B).
+            logging.info("Sincronizando contenido de subordinados al jefe...")
+            synced = 0
+            with self.db_lock:
+                for url, versions in url_versions.items():
+                    best = max(versions, key=lambda v: v[1] or '')
+                    best_node, best_date, best_content = best
+                    if best_content is None:
+                        continue
+                    self.db_cursor.execute('SELECT url_id, scrapped_at FROM urls WHERE url = ?', (url,))
+                    row = self.db_cursor.fetchone()
+                    if row is None:
+                        self.db_cursor.execute(
+                            'INSERT INTO urls (url, content, scrapped_at) VALUES (?, ?, ?)',
+                            (url, best_content, best_date)
+                        )
+                        url_id = self.db_cursor.lastrowid
+                        self.db_cursor.execute(
+                            'INSERT OR IGNORE INTO url_db_log (url_id, node_id) VALUES (?, ?)',
+                            (url_id, self.node_id)
+                        )
+                        synced += 1
+                        logging.info(f"   → URL nueva importada al jefe: {url}")
+                    else:
+                        url_id, existing_date = row
+                        if existing_date is None or (best_date and best_date > existing_date):
+                            self.db_cursor.execute(
+                                'UPDATE urls SET content = ?, scrapped_at = ? WHERE url_id = ?',
+                                (best_content, best_date, url_id)
+                            )
+                            synced += 1
+                self.db_conn.commit()
+            logging.info(f"Sincronización completada: {synced} URLs actualizadas/importadas al jefe")
             
-            # 6. Verificar y balancear réplicas (eliminar excesos)
+            # 6. Verificar y balancear réplicas (eliminar excesos, completar faltantes)
             logging.info("=" * 60)
             logging.info("BALANCEO: Verificando y ajustando número de réplicas")
             logging.info("=" * 60)
@@ -936,45 +977,111 @@ class DatabaseNode(Node):
         """
         Balancea el número de réplicas para cada URL.
         Si hay más de target_replicas (3), elimina réplicas al azar hasta tener exactamente 3.
+        Si hay menos de 3, replica a subordinados disponibles que aún no la tengan.
         
         Args:
             url_versions: Dict {url: [(node_id, scrapped_at, content), ...]}
         """
         target_replicas = 3
         excess_removed = 0
+        replicas_added = 0
         
         try:
+            # Obtener lista de subordinados conectados (para poder replicar)
+            with self.subordinates_lock:
+                all_nodes = list(self.subordinates.keys()) + [self.node_id]
+
             for url, versions in url_versions.items():
                 current_replicas = len(versions)
-                
-                if current_replicas <= target_replicas:
-                    continue  # No hay exceso
-                
-                excess = current_replicas - target_replicas
-                logging.warning(f"⚠️  URL {url} tiene {current_replicas} réplicas (exceso: {excess})")
-                
-                # Seleccionar nodos al azar para eliminar
-                # Hacer una copia para no modificar el original
-                import random
-                nodes_to_remove = random.sample(versions, excess)
-                
-                logging.info(f"   → Eliminando {excess} réplicas al azar...")
-                
-                for node_id, _, _ in nodes_to_remove:
-                    excess_removed += 1
-                    logging.info(f"   → Eliminando réplica de {node_id}")
+                nodes_with_url = [v[0] for v in versions]
+
+                if current_replicas > target_replicas:
+                    excess = current_replicas - target_replicas
+                    logging.warning(f"⚠️  URL {url} tiene {current_replicas} réplicas (exceso: {excess})")
                     
-                    if node_id == self.node_id:
-                        # Eliminar de mi propia BD
-                        self._delete_own_url_content(url)
-                    else:
-                        # Enviar mensaje al subordinado
-                        self._send_url_deletion_to_subordinate(node_id, url)
+                    import random
+                    nodes_to_remove = random.sample(versions, excess)
+                    
+                    logging.info(f"   → Eliminando {excess} réplicas al azar...")
+                    
+                    for node_id, _, _ in nodes_to_remove:
+                        excess_removed += 1
+                        nodes_with_url.remove(node_id)
+                        logging.info(f"   → Eliminando réplica de {node_id}")
+                        
+                        if node_id == self.node_id:
+                            self._delete_own_url_content(url)
+                        else:
+                            self._send_url_deletion_to_subordinate(node_id, url)
+
+                elif current_replicas < target_replicas:
+                    needed = target_replicas - current_replicas
+                    available = [n for n in all_nodes if n not in nodes_with_url]
+                    
+                    if not available:
+                        logging.warning(f"URL {url} tiene solo {current_replicas} réplicas y no hay nodos disponibles para más")
+                        continue
+                    
+                    import random
+                    targets = random.sample(available, min(needed, len(available)))
+                    logging.info(f"URL {url} tiene {current_replicas} réplicas, replicando a {len(targets)} nodos más")
+                    
+                    # Obtener el contenido más reciente de versions
+                    best = max(versions, key=lambda v: v[1] or '')
+                    _, _, content_json = best
+                    
+                    with self.db_lock:
+                        self.db_cursor.execute('SELECT url_id FROM urls WHERE url = ?', (url,))
+                        row = self.db_cursor.fetchone()
+                        url_id = row[0] if row else None
+                    
+                    if url_id is None:
+                        continue
+                    
+                    for target_node_id in targets:
+                        if target_node_id == self.node_id:
+                            # El jefe mismo no tiene la réplica — recuperarla de un sub que sí la tenga
+                            source_node_id = nodes_with_url[0] if nodes_with_url else None
+                            if source_node_id:
+                                logging.info(f"   → Jefe solicitando contenido de {source_node_id} para URL {url}")
+                                self._request_and_replicate_content(url, url_id, source_node_id, [])
+                        else:
+                            with self.subordinates_lock:
+                                target_conn = self.subordinates.get(target_node_id)
+                                if not target_conn:
+                                    for nid, conn in self.subordinates.items():
+                                        if target_node_id in nid:
+                                            target_conn = conn
+                                            break
+                            if target_conn and content_json:
+                                result = json.loads(content_json)
+                                replicate_msg = self._create_message(
+                                    MessageProtocol.MESSAGE_TYPES['SAVE_DATA_NO_LEADER'],
+                                    {
+                                        'url': url,
+                                        'result': result,
+                                        'task_id': f'balance-{url_id}'
+                                    }
+                                )
+                                target_conn.send_message(replicate_msg)
+                                with self.db_lock:
+                                    self.db_cursor.execute('''
+                                        INSERT OR IGNORE INTO url_db_log (url_id, node_id)
+                                        VALUES (?, ?)
+                                    ''', (url_id, target_node_id))
+                                    self.db_cursor.execute('''
+                                        UPDATE urls SET current_replicas = current_replicas + 1
+                                        WHERE url_id = ?
+                                    ''', (url_id,))
+                                    self.db_conn.commit()
+                                replicas_added += 1
+                                logging.info(f"   → URL {url} replicada a {target_node_id}")
             
             # Resumen
             logging.info("=" * 60)
             logging.info(f"BALANCEO COMPLETADO:")
             logging.info(f"  - Réplicas excesivas eliminadas: {excess_removed}")
+            logging.info(f"  - Réplicas faltantes añadidas: {replicas_added}")
             logging.info("=" * 60)
             
         except Exception as e:

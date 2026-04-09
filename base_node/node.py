@@ -641,28 +641,10 @@ class Node:
                         # Agregar como subordinado
                         success = self.add_subordinate(client_ip, existing_socket=sock)
                         
-                        # if success:
-                        #     # Notificar a la subclase que se heredó un nuevo subordinado de un conflicto
-                        #     # self._on_subordinate_inherited_from_conflict(client_ip)
-                            
-                        #     # Enviarle IDENTIFICATION para que sepa que debe volverse subordinado
-                        #     response = self._create_message(
-                        #         MessageProtocol.MESSAGE_TYPES['IDENTIFICATION'],
-                        #         {
-                        #             'node_port': self.port,
-                        #             'is_boss': True,
-                        #             'is_temporary': False
-                        #         }
-                        #     )
-                        #     try:
-                        #         response_bytes = json.dumps(response).encode()
-                        #         sock.sendall(len(response_bytes).to_bytes(2, 'big'))
-                        #         sock.sendall(response_bytes)
-                        #         logging.info(f"Notificación de jefe enviada a {client_ip}")
-                        #     except Exception as e:
-                        #         logging.error(f"Error notificando a {client_ip}: {e}")
-                        # else:
-                        if not success:
+                        if success:
+                            # Notificar a la subclase que se heredó un nuevo subordinado de un conflicto
+                            self._on_subordinate_inherited_from_conflict(client_ip)
+                        else:
                             logging.error(f"No se pudo registrar {client_ip} como subordinado")
                             sock.close()
                     else:
@@ -1407,17 +1389,17 @@ class Node:
         logging.debug(f"reassign_tasks_from_subordinate no implementado para {self.node_type}")
         return 0
     
-    # def _on_subordinate_inherited_from_conflict(self, subordinate_node_id):
-    #     """
-    #     Hook que se llama cuando se hereda un subordinado después de un conflicto entre jefes.
-    #     Las subclases pueden sobrescribir para realizar acciones específicas.
+    def _on_subordinate_inherited_from_conflict(self, subordinate_node_id):
+        """
+        Hook que se llama cuando se hereda un subordinado después de un conflicto entre jefes.
+        Las subclases pueden sobrescribir para realizar acciones específicas.
         
-    #     Args:
-    #         subordinate_node_id (str): ID del subordinado heredado
-    #     """
-    #     logging.debug(f"Subordinado heredado en conflicto: {subordinate_node_id}")
-    #     # Implementación base: no hace nada
-    #     pass
+        Args:
+            subordinate_node_id (str): ID del subordinado heredado
+        """
+        logging.debug(f"Subordinado heredado en conflicto: {subordinate_node_id}")
+        # Implementación base: no hace nada
+        pass
         
     def send_to_boss(self, message_dict):
         """Enviar mensaje a mi jefe"""
