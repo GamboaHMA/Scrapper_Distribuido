@@ -173,8 +173,6 @@ class DatabaseNode(Node):
                         FROM url_db_log 
                         WHERE node_id != ?
                     ''', (self.node_id,))
-                    
-                with self.db_lock:
                     db_subordinates = [row[0] for row in self.db_cursor.fetchall()]
                 
                 # Detectar subordinados desconectados
@@ -205,8 +203,6 @@ class DatabaseNode(Node):
                     FROM url_db_log 
                     WHERE node_id = ?
                 ''', (disconnected_node_id,))
-            
-            with self.db_lock:
                 affected_urls = [row[0] for row in self.db_cursor.fetchall()]
                 
             if not affected_urls:
@@ -221,7 +217,7 @@ class DatabaseNode(Node):
                     DELETE FROM url_db_log 
                     WHERE node_id = ?
                 ''', (disconnected_node_id,))
-            self.db_conn.commit()
+                self.db_conn.commit()
             
             logging.info(f"Registros de {disconnected_node_id} eliminados de url_db_log")
             
@@ -246,8 +242,6 @@ class DatabaseNode(Node):
                             FROM url_db_log
                             WHERE url_id = ? AND node_id IN ({placeholders})
                         ''', (url_id, *connected_nodes))
-                        
-                    with self.db_lock:
                         current_replicas = self.db_cursor.fetchone()[0]
                 else:
                     current_replicas = 0
@@ -259,7 +253,7 @@ class DatabaseNode(Node):
                             SET current_replicas = ?
                             WHERE url_id = ?
                         ''', (current_replicas, url_id))
-                    self.db_conn.commit()
+                        self.db_conn.commit()
                 
                 logging.info(f"URL {url_id} ahora tiene {current_replicas} réplicas (era 1 más antes)")
                 
@@ -318,8 +312,6 @@ class DatabaseNode(Node):
                     FROM url_db_log
                     WHERE url_id = ? AND node_id IN ({placeholders})
                 ''', (url_id, *connected_nodes))
-                
-            with self.db_lock:
                 current_replicas = self.db_cursor.fetchone()[0]
                 
             target_replicas = 3
@@ -340,8 +332,6 @@ class DatabaseNode(Node):
                     WHERE u.url_id = ?
                     LIMIT 1
                 ''', (url_id,))
-                
-            with self.db_lock:
                 url_info = self.db_cursor.fetchone()
                 
             if not url_info:
@@ -363,8 +353,6 @@ class DatabaseNode(Node):
                     FROM url_db_log 
                     WHERE url_id = ?
                 ''', (url_id,))
-                
-            with self.db_lock:
                 nodes_with_url = [row[0] for row in self.db_cursor.fetchall()]
             
             available_subordinates = [nid for nid in connected_node_ids if nid not in nodes_with_url]
@@ -459,8 +447,6 @@ class DatabaseNode(Node):
                     FROM url_db_log
                     WHERE url_id = ?
                 ''', (url_id,))
-                
-            with self.db_lock:
                 new_count = self.db_cursor.fetchone()[0]
             
             with self.db_lock:
@@ -498,7 +484,6 @@ class DatabaseNode(Node):
             # Obtener contenido de la BD local
             with self.db_lock:
                 self.db_cursor.execute('SELECT url_id FROM urls WHERE url = ?', (url,))
-            with self.db_lock:
                 url_id_row = self.db_cursor.fetchone()
             
             if not url_id_row:
@@ -510,8 +495,6 @@ class DatabaseNode(Node):
             # Obtener contenido
             with self.db_lock:
                 self.db_cursor.execute('SELECT content, scrapped_at FROM urls WHERE url_id = ?', (local_url_id,))
-                
-            with self.db_lock:
                 content_row = self.db_cursor.fetchone()
             
             if not content_row:
@@ -623,8 +606,6 @@ class DatabaseNode(Node):
                     FROM urls
                     WHERE content IS NOT NULL
                 ''')
-                
-            with self.db_lock:
                 urls = [{
                     'url_id': row[0], 
                     'url': row[1],
@@ -707,8 +688,6 @@ class DatabaseNode(Node):
                     
                     with self.db_lock:
                         self.db_cursor.execute('SELECT url_id FROM urls WHERE url = ?', (url,))
-                    
-                    with self.db_lock:
                         existing = self.db_cursor.fetchone()
                     
                     if existing:
@@ -799,8 +778,6 @@ class DatabaseNode(Node):
                     FROM urls
                     WHERE content IS NOT NULL
                 ''')
-                
-            with self.db_lock:
                 own_urls = self.db_cursor.fetchall()
             
             if not own_urls:
@@ -828,7 +805,6 @@ class DatabaseNode(Node):
                             FROM url_db_log
                             WHERE url_id = ?
                         ''', (url_id,))
-                    with self.db_lock:
                         new_count = self.db_cursor.fetchone()[0]
                     
                     with self.db_lock:
@@ -877,7 +853,7 @@ class DatabaseNode(Node):
                     FROM urls
                     WHERE content IS NOT NULL AND scrapped_at IS NOT NULL
                 ''')
-            with self.db_lock:
+
                 for url, scrapped_at, content in self.db_cursor.fetchall():
                     if url not in url_versions:
                         url_versions[url] = []
@@ -1079,8 +1055,6 @@ class DatabaseNode(Node):
                     
                     with self.db_lock:
                         self.db_cursor.execute('SELECT url_id FROM urls WHERE url = ?', (url,))
-                        
-                    with self.db_lock:
                         row = self.db_cursor.fetchone()
                         
                     url_id = row[0] if row else None
@@ -1258,7 +1232,6 @@ class DatabaseNode(Node):
                     FROM urls
                     WHERE content IS NOT NULL
                 ''')
-            with self.db_lock:
                 own_urls = self.db_cursor.fetchall()
             
             if not own_urls:
@@ -1275,7 +1248,6 @@ class DatabaseNode(Node):
                         FROM url_db_log
                         WHERE url_id = ?
                     ''', (url_id,))
-                with self.db_lock:
                     current_replicas = self.db_cursor.fetchone()[0]
                 
                 needed_replicas = 3 - current_replicas
@@ -1296,7 +1268,6 @@ class DatabaseNode(Node):
                         FROM url_db_log 
                         WHERE url_id = ?
                     ''', (url_id,))
-                with self.db_lock:
                     nodes_with_url = [row[0] for row in self.db_cursor.fetchall()]
                 
                 available_subordinates = [nid for nid in connected_node_ids if nid not in nodes_with_url]
