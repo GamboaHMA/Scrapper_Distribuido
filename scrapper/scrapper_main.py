@@ -908,7 +908,18 @@ class ScrapperNode(Node):
             
             # Actualizar perfil (set_connection ya tiene su propio lock)
             boss_profile.set_connection(new_connection)
-            
+
+            # Sincronizar bosses_connections para que _cleanup_dead_nodes
+            # monitoree esta conexión y no reintente con la IP anterior
+            with self.bosses_connections_lock:
+                old_conn = self.bosses_connections.get(node_type)
+                if old_conn is not None and old_conn is not new_connection:
+                    try:
+                        old_conn.disconnect()
+                    except Exception:
+                        pass
+                self.bosses_connections[node_type] = new_connection
+
             # Iniciar heartbeats
             # threading.Thread(
             #     target=self._heartbeat_loop,

@@ -2405,6 +2405,17 @@ class DatabaseNode(Node):
                     "port": boss_profile.port,
                 }
 
+                # Sincronizar bosses_connections para que _cleanup_dead_nodes
+                # monitoree esta conexión y no reintente con la IP anterior
+                with self.bosses_connections_lock:
+                    old_conn = self.bosses_connections.get(node_type)
+                    if old_conn is not None and old_conn is not connection:
+                        try:
+                            old_conn.disconnect()
+                        except Exception:
+                            pass
+                    self.bosses_connections[node_type] = connection
+
                 logging.info(
                     f"✓ Conexión establecida con jefe {node_type} en {boss_ip}"
                 )

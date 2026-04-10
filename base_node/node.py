@@ -97,7 +97,7 @@ class Node:
         # Thread de monitoreo de conexiones
         self.connection_monitor_thread = None
         self.connection_monitor_stop_event = threading.Event()
-        self.connection_check_interval = 10  # Verificar cada 10 segundos
+        self.connection_check_interval = 8  # Verificar cada 8 segundos
         
         # # Hilo de monitoreo de heartbeats
         # self.heartbeat_monitor_thread = None
@@ -448,6 +448,7 @@ class Node:
                     sender_id=self.node_id
                 )
                 if conn.connect():
+                    
                     self.bosses_connections[new_boss_node_type] = conn
                     logging.info(f"Conexión establecida con nuevo jefe {new_boss_node_type} en {new_boss_ip}:{new_boss_port}")
 
