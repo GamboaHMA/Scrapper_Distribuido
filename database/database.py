@@ -387,7 +387,9 @@ class DatabaseNode(Node):
         """
         try:
             if source_node_id == self.node_id:
-                self._self_replicate_content(url, [{'node_id': tid} for tid in target_subordinates])
+                targets_info = [{'node_id': tid} for tid in target_subordinates]
+                self._self_replicate_content(url, targets_info)
+                self._register_in_url_db_log(url, targets_info)
                 return
 
             # Buscar conexión con el subordinado fuente
@@ -432,14 +434,15 @@ class DatabaseNode(Node):
             logging.info(f"REPLICATE_CONTENT enviado a {source_node_id}")
             
             # Registrar optimistamente que los destinos tendrán el contenido
-            with self.db_lock:
-                for target_info in targets_info:
-                    target_node_id = target_info['node_id']
-                    self.db_cursor.execute('''
-                        INSERT OR IGNORE INTO url_db_log (url, node_id)
-                        VALUES (?, ?)
-                    ''', (url, target_node_id))
-                self.db_conn.commit()
+            self._register_in_url_db_log(url, targets_info)
+            # with self.db_lock:
+            #     for target_info in targets_info:
+            #         target_node_id = target_info['node_id']
+            #         self.db_cursor.execute('''
+            #             INSERT OR IGNORE INTO url_db_log (url, node_id)
+            #             VALUES (?, ?)
+            #         ''', (url, target_node_id))
+            #     self.db_conn.commit()
             
             with self.db_lock:
                 self.db_cursor.execute('''
@@ -455,6 +458,16 @@ class DatabaseNode(Node):
             logging.error(f"Error solicitando replicación de contenido: {e}")
             import traceback
             traceback.print_exc()
+        
+    def _register_in_url_db_log(self, url, targets_info):
+        with self.db_lock:
+            for target_info in targets_info:
+                target_node_id = target_info['node_id']
+                self.db_cursor.execute('''
+                    INSERT OR IGNORE INTO url_db_log (url, node_id)
+                    VALUES (?, ?)
+                ''', (url, target_node_id))
+            self.db_conn.commit()
 
     def _handle_replicate_content_request(self, node_connection, message):
         """
@@ -471,7 +484,8 @@ class DatabaseNode(Node):
         self._self_replicate_content(url, targets)
     
     def _self_replicate_content(self, url, targets):
-        """ Método interno para que el jefe BD maneje la replicación de contenido a los subordinados destino.
+        """ Método interno para que el nodo que tiene el contenido lo replique a los destinos indicados. 
+        Se usa tanto para re-replicación normal como para casos donde el jefe es también fuente.
         Args:
             url: URL a replicar
             targets: Lista de subordinados destino (con node_id y IP)
