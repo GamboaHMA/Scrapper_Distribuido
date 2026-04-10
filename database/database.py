@@ -314,14 +314,14 @@ class DatabaseNode(Node):
             
             logging.info(f"URL {url} tiene {current_replicas} réplicas, necesita {needed_replicas} más")
                 
-                # Obtener un nodo fuente que tiene la URL
+            # Obtener un nodo fuente que tiene la URL
             with self.db_lock:
                 self.db_cursor.execute('''
-                    SELECT node_id
+                    SELECT node_id 
                     FROM url_db_log
-                    WHERE url = ?
+                    WHERE url = ? AND node_id != ?
                     LIMIT 1
-                ''', (url,))
+                ''', (url, exclude_node_id))
                 source_row = self.db_cursor.fetchone()
                 
             if not source_row:
@@ -553,6 +553,11 @@ class DatabaseNode(Node):
         
         # Esperar respuestas (timeout 10 segundos)
         self.inventory_complete.wait(timeout=10)
+        
+        with self.db_lock:
+            self.db_cursor.execute('SELECT url, content, scrapped_at FROM urls WHERE content IS NOT NULL')
+            own_urls = [{'url': r[0], 'content': r[1], 'scrapped_at': r[2]} for r in self.db_cursor.fetchall()]
+        self.inventory_responses[self.node_id] = own_urls
         
         # Reconstruir tablas con las respuestas recibidas
         self._rebuild_tables_from_inventory()
@@ -1353,10 +1358,11 @@ class DatabaseNode(Node):
                             subordinate_conn.send_message(replicate_msg)
                             
                             # Registrar en url_db_log con node_id
-                            self.db_cursor.execute('''
-                                INSERT OR IGNORE INTO url_db_log (url, node_id, added_at)
-                                VALUES (?, ?, datetime('now'))
-                            ''', (url, new_subordinate_id))
+                            with self.db_lock:
+                                self.db_cursor.execute('''
+                                    INSERT OR IGNORE INTO url_db_log (url, node_id, added_at)
+                                    VALUES (?, ?, datetime('now'))
+                                ''', (url, new_subordinate_id))
                             
                             self.db_conn.commit()
                             replicated_count += 1
