@@ -345,7 +345,7 @@ class DatabaseNode(Node):
                 ''', (url,))
                 nodes_with_url = [row[0] for row in self.db_cursor.fetchall()]
             
-            available_subordinates = [nid for nid in connected_node_ids if nid not in nodes_with_url]
+            available_subordinates = [nid for nid in connected_nodes if nid not in nodes_with_url]
             
             if not available_subordinates:
                 logging.warning(f"[REREPLICATE] No hay subordinados disponibles para re-replicar URL {url}. Conectados: {len(connected_node_ids)}, Disponibles sin URL: 0")
