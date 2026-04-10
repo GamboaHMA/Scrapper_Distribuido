@@ -174,6 +174,51 @@ class DatabaseNode(Node):
 
     # ==================== FIN HELPERS INTERNOS ====================
 
+    def add_external_client(
+        self, client_ip, client_node_type, client_port, existing_socket=None
+    ):
+        """
+        Sobrescribe Node.add_external_client para limpiar conexiones obsoletas antes de
+        rechazar la nueva conexión entrante.
+
+        La implementación base rechaza la conexión si ya hay una entrada en
+        bosses_connections, incluso si esa entrada está muerta.  Aquí eliminamos la
+        entrada obsoleta para que la base pueda aceptar la reconexión correctamente.
+        También actualiza el BossProfile correspondiente en external_bosses si existe.
+        """
+        with self.bosses_connections_lock:
+            old_conn = self.bosses_connections.get(client_node_type)
+            if old_conn is not None and not old_conn.is_connected():
+                logging.info(
+                    f"Conexión obsoleta con {client_node_type} detectada — "
+                    f"eliminando para permitir reconexión"
+                )
+                del self.bosses_connections[client_node_type]
+                # Limpiar también el BossProfile si corresponde
+                boss_profile = self.external_bosses.get(client_node_type)
+                if boss_profile is not None:
+                    boss_profile.clear_connection()
+
+        result = super().add_external_client(
+            client_ip, client_node_type, client_port, existing_socket=existing_socket
+        )
+
+        # La base solo actualiza bosses_connections pero no el BossProfile de
+        # external_bosses.  Si tuvo éxito, actualizamos el perfil aquí.
+        if result:
+            boss_profile = self.external_bosses.get(client_node_type)
+            if boss_profile is not None:
+                with self.bosses_connections_lock:
+                    new_conn = self.bosses_connections.get(client_node_type)
+                if new_conn is not None and new_conn.is_connected():
+                    boss_profile.set_connection(new_conn)
+                    logging.info(
+                        f"BossProfile de {client_node_type} actualizado "
+                        f"tras conexión entrante"
+                    )
+
+        return result
+
     def reassign_tasks_from_subordinate(self, node_id):
         """
         Sobrescribe método de Node para manejar desconexión de subordinados BD.
@@ -2269,6 +2314,20 @@ class DatabaseNode(Node):
             # Si ya estamos conectados, solo monitorear
             if boss_profile.is_connected():
                 # Esperar y verificar conexión
+                time.sleep(retry_interval)
+                continue
+
+            # Puede que el jefe se haya conectado a nosotros (conexión entrante) y
+            # add_external_client lo registró en bosses_connections pero no actualizó
+            # el BossProfile.  En ese caso adoptamos esa conexión en lugar de crear una nueva.
+            with self.bosses_connections_lock:
+                existing_conn = self.bosses_connections.get(node_type)
+            if existing_conn is not None and existing_conn.is_connected():
+                logging.info(
+                    f"Jefe {node_type} ya conectado vía conexión entrante — "
+                    f"adoptando conexión existente en BossProfile"
+                )
+                boss_profile.set_connection(existing_conn)
                 time.sleep(retry_interval)
                 continue
 
