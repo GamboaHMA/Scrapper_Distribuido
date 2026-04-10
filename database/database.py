@@ -135,6 +135,13 @@ class DatabaseNode(Node):
             daemon=True,
             name="bd-subordinates-monitor"
         ).start()
+
+        # Iniciar monitor de conteo de réplicas (detecta exceso y falta de réplicas)
+        threading.Thread(
+            target=self._monitor_replica_counts,
+            daemon=True,
+            name="bd-replica-count-monitor"
+        ).start()
         
         logging.info("Tareas de jefe BD iniciadas correctamente")
     
@@ -187,6 +194,115 @@ class DatabaseNode(Node):
                 logging.error(f"Error en monitor de subordinados: {e}")
                 import traceback
                 traceback.print_exc()
+
+    def _monitor_replica_counts(self):
+        """
+        Hilo que periódicamente revisa url_db_log y corrige el número de réplicas de cada URL:
+        - Si una URL tiene MÁS de TARGET_REPLICAS réplicas activas → elimina el exceso al azar.
+        - Si una URL tiene MENOS de TARGET_REPLICAS réplicas activas → la re-replica a nodos
+          disponibles que no la tengan.
+        Solo considera réplicas en nodos actualmente conectados (jefe + subordinados).
+        """
+        check_interval = 10  # segundos entre cada revisión
+        logging.info("[REPLICA-MONITOR] Hilo de monitoreo de conteo de réplicas iniciado")
+
+        while self.running and self.i_am_boss:
+            time.sleep(check_interval)
+
+            if not self.i_am_boss:
+                break
+
+            try:
+                # Nodos actualmente activos (jefe + subordinados conectados)
+                with self.subordinates_lock:
+                    active_nodes = list(self.subordinates.keys())
+                if self.node_id not in active_nodes:
+                    active_nodes.append(self.node_id)
+
+                if not active_nodes:
+                    continue
+
+                placeholders = ','.join(['?'] * len(active_nodes))
+
+                # Obtener conteo de réplicas activas por URL
+                with self.db_lock:
+                    self.db_cursor.execute(f'''
+                        SELECT url, COUNT(DISTINCT node_id) AS rep_count
+                        FROM url_db_log
+                        WHERE node_id IN ({placeholders})
+                        GROUP BY url
+                    ''', active_nodes)
+                    url_counts = self.db_cursor.fetchall()
+
+                for url, rep_count in url_counts:
+                    try:
+                        if rep_count > TARGET_REPLICAS:
+                            # ── EXCESO: eliminar réplicas sobrantes al azar ──────────────
+                            excess = rep_count - TARGET_REPLICAS
+                            logging.info(f"[REPLICA-MONITOR] {url}: {rep_count} réplicas (exceso {excess}), eliminando...")
+
+                            with self.db_lock:
+                                self.db_cursor.execute(f'''
+                                    SELECT node_id FROM url_db_log
+                                    WHERE url = ? AND node_id IN ({placeholders})
+                                ''', (url, *active_nodes))
+                                holders = [row[0] for row in self.db_cursor.fetchall()]
+
+                            random.shuffle(holders)
+                            to_remove = holders[:excess]
+
+                            for node_id in to_remove:
+                                if node_id == self.node_id:
+                                    self._delete_own_url_content(url)
+                                else:
+                                    self._send_url_deletion_to_subordinate(node_id, url)
+                                # Actualizar log localmente
+                                with self.db_lock:
+                                    self.db_cursor.execute(
+                                        'DELETE FROM url_db_log WHERE url = ? AND node_id = ?',
+                                        (url, node_id)
+                                    )
+                                    self.db_conn.commit()
+                                logging.info(f"[REPLICA-MONITOR] Réplica de {url} eliminada en {node_id}")
+
+                        elif rep_count < TARGET_REPLICAS:
+                            # ── FALTANTE: replicar a nodos que no la tienen ───────────
+                            needed = TARGET_REPLICAS - rep_count
+                            logging.info(f"[REPLICA-MONITOR] {url}: {rep_count} réplicas (faltan {needed}), replicando...")
+
+                            with self.db_lock:
+                                self.db_cursor.execute(f'''
+                                    SELECT node_id FROM url_db_log
+                                    WHERE url = ? AND node_id IN ({placeholders})
+                                ''', (url, *active_nodes))
+                                nodes_with_url = [row[0] for row in self.db_cursor.fetchall()]
+
+                            available = [n for n in active_nodes if n not in nodes_with_url]
+                            if not available:
+                                logging.warning(f"[REPLICA-MONITOR] {url}: no hay nodos disponibles para replicar")
+                                continue
+
+                            random.shuffle(available)
+                            targets = available[:needed]
+
+                            # Obtener nodo fuente (cualquiera que ya la tenga)
+                            source = nodes_with_url[0] if nodes_with_url else None
+                            if not source:
+                                logging.warning(f"[REPLICA-MONITOR] {url}: no hay fuente disponible")
+                                continue
+
+                            self._request_and_replicate_content(url, source, targets)
+                            logging.info(f"[REPLICA-MONITOR] {url}: replicación solicitada a {targets}")
+
+                    except Exception as e:
+                        logging.error(f"[REPLICA-MONITOR] Error procesando {url}: {e}")
+
+            except Exception as e:
+                logging.error(f"[REPLICA-MONITOR] Error en ciclo de monitoreo: {e}")
+                import traceback
+                traceback.print_exc()
+
+        logging.info("[REPLICA-MONITOR] Hilo de monitoreo de réplicas terminado")
 
     def _handle_subordinate_disconnection(self, disconnected_node_id):
         """
