@@ -313,17 +313,27 @@ class DatabaseNode(Node):
                 return
             
             logging.info(f"URL {url} tiene {current_replicas} réplicas, necesita {needed_replicas} más")
-                
-            # Obtener un nodo fuente que tiene la URL
-            with self.db_lock:
-                self.db_cursor.execute('''
-                    SELECT node_id 
-                    FROM url_db_log
-                    WHERE url = ? AND node_id != ?
-                    LIMIT 1
-                ''', (url, exclude_node_id))
-                source_row = self.db_cursor.fetchone()
-                
+            if exclude_node_id:
+                logging.info(f"Excluyendo nodo {exclude_node_id} de la re-replicación")
+                # Obtener un nodo fuente que tiene la URL
+                with self.db_lock:
+                    self.db_cursor.execute('''
+                        SELECT node_id 
+                        FROM url_db_log
+                        WHERE url = ? AND node_id != ?
+                        LIMIT 1
+                    ''', (url, exclude_node_id))
+                    source_row = self.db_cursor.fetchone()
+            else:
+                with self.db_lock:
+                    self.db_cursor.execute('''
+                        SELECT node_id 
+                        FROM url_db_log
+                        WHERE url = ?
+                        LIMIT 1
+                    ''', (url,))
+                    source_row = self.db_cursor.fetchone()
+            
             if not source_row:
                 logging.error(f"No hay réplicas activas para URL {url}, no se puede re-replicar")
                 return
@@ -376,6 +386,10 @@ class DatabaseNode(Node):
             target_subordinates: Lista de node_ids para replicar
         """
         try:
+            if source_node_id == self.node_id:
+                self._self_replicate_content(url, [{'node_id': tid} for tid in target_subordinates])
+                return
+
             # Buscar conexión con el subordinado fuente
             source_conn = None
             with self.subordinates_lock:
@@ -454,7 +468,14 @@ class DatabaseNode(Node):
         data = message.get('data', {})
         url = data.get('url')
         targets = data.get('targets', [])
-        
+        self._self_replicate_content(url, targets)
+    
+    def _self_replicate_content(self, url, targets):
+        """ Método interno para que el jefe BD maneje la replicación de contenido a los subordinados destino.
+        Args:
+            url: URL a replicar
+            targets: Lista de subordinados destino (con node_id y IP)
+        """
         logging.info(f"REPLICATE_CONTENT recibido: replicar {url} a {len(targets)} subordinados")
         
         try:
