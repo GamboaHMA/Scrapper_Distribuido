@@ -460,6 +460,11 @@ class DatabaseNode(Node):
             traceback.print_exc()
         
     def _register_in_url_db_log(self, url, targets_info):
+        '''Registra en la tabla url_db_log que los subordinados destino tendrán la URL replicada.
+        Args:
+            url: URL a registrar
+            targets_info: Lista de subordinados destino (con node_id)
+        '''
         with self.db_lock:
             for target_info in targets_info:
                 target_node_id = target_info['node_id']
