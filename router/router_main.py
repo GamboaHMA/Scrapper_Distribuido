@@ -1043,6 +1043,7 @@ class RouterNode(Node):
         Se llama cuando el nodo cede el rol de jefe.
         """
         logging.info("=== DETENIENDO TAREAS DEL JEFE ROUTER ===")
+        self.i_am_boss = False  # Cambiar el estado de jefe a False para que los loops sepan que ya no son jefe
         
         # El thread de procesamiento de tareas es daemon y verifica self.running
         # Al cambiar i_am_boss, las tareas ya no se procesarán adecuadamente

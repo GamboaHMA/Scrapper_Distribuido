@@ -1042,6 +1042,7 @@ class ScrapperNode(Node):
         Se llama cuando el nodo cede el rol de jefe.
         """
         logging.info("=== DETENIENDO TAREAS DEL JEFE SCRAPPER ===")
+        self.i_am_boss = False  # Cambiar el estado de jefe a False para que los loops sepan que ya no son jefe
         
         # El thread task_assignment_thread es daemon y verifica self.i_am_boss
         # Al cambiar i_am_boss a False, el loop se detendrá automáticamente

@@ -307,6 +307,7 @@ class DatabaseNode(Node):
         Se llama cuando el nodo cede el rol de jefe.
         """
         logging.info("=== DETENIENDO TAREAS DEL JEFE BD ===")
+        self.i_am_boss = False  # Esto hará que el monitor de subordinados se detenga automáticamente 
 
         # El thread de monitoreo es daemon y verifica self.i_am_boss
         # Al cambiar i_am_boss a False, el loop se detendrá automáticamente
@@ -2305,12 +2306,12 @@ class DatabaseNode(Node):
         Args:
             node_type: Tipo de nodo a buscar ('router')
         """
-        retry_interval = 5  # segundos entre intentos
+        retry_interval = 16 # segundos entre intentos
         boss_profile = self.external_bosses[node_type]
 
         logging.info(f"Iniciando búsqueda periódica del jefe {node_type}...")
 
-        while self.running:
+        while self.running and self.i_am_boss:
             # Si ya estamos conectados, solo monitorear
             if boss_profile.is_connected():
                 # Esperar y verificar conexión
@@ -2333,6 +2334,7 @@ class DatabaseNode(Node):
 
             # No conectado, buscar
             logging.debug(f"Buscando jefe {node_type}...")
+            logging.debug(f"self.i_am_boss={self.i_am_boss}, boss_profile.is_connected()={boss_profile.is_connected()}")
 
             # Intentar descubrir nodos
             node_ips = self.discover_nodes(node_type, boss_profile.port)
