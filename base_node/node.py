@@ -833,6 +833,16 @@ class Node:
         # Si ya soy jefe, no es necesario (y podría disrumpir conexiones activas)
         if not self.i_am_boss:
             threading.Thread(target=self.call_elections, daemon=True).start()
+        else:
+            response = self._create_message(
+                MessageProtocol.MESSAGE_TYPES['ELECTION_RESPONSE'],
+                {
+                    'ip': self.ip,
+                    'port': self.port,
+                    'boss': True
+                }
+        )
+
     
     def _handle_new_boss_message(self, sock, client_ip, message):
         """
@@ -1798,6 +1808,11 @@ class Node:
                                                    timeout=3.0, 
                                                    node_type=self.node_type)
             
+            if response and response.get('data').get('boss') == True:
+                boss_ip = response.get('data').get('ip')
+                self.connect_to_boss(boss_ip)
+                break
+
             if response and response.get('type') == MessageProtocol.MESSAGE_TYPES['ELECTION_RESPONSE']:
                 # ¡Hay alguien con IP mayor vivo!
                 logging.info(f"✓ Respuesta recibida de {ip}. Él será el jefe.")
