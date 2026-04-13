@@ -8,12 +8,7 @@ COPY router/requirements.txt ./router/requirements.txt
 # Instalar dependencias
 RUN pip install --no-cache-dir -r ./router/requirements.txt
 
-# Copiar base_node (desde raíz del proyecto - incluye utils)
-COPY base_node ./base_node
-
-# Copiar archivos del router
-COPY router/router_main.py ./router/router_main.py
-
+# El código fuente se monta como volumen en tiempo de ejecución.
 # Variables de entorno
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONPATH=/app

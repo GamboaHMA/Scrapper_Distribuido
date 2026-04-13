@@ -2,10 +2,7 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Copiar archivos necesarios
-COPY base_node/ /app/base_node/
-COPY client/client.py /app/client/client.py
-
+# El código fuente se monta como volumen en tiempo de ejecución.
 # Variables de entorno (pueden sobrescribirse al ejecutar)
 ENV ROUTER_HOST=router
 ENV ROUTER_PORT=7070

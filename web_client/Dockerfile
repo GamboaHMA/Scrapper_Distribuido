@@ -2,11 +2,7 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Copiar código base compartido
-COPY base_node/ /app/base_node/
-
-# Copiar cliente web
-COPY web_client/ /app/web_client/
+# El código fuente se monta como volumen en tiempo de ejecución.
 
 WORKDIR /app/web_client
 

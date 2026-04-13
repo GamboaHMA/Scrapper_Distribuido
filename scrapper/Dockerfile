@@ -6,13 +6,7 @@ WORKDIR /app
 COPY scrapper/requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copiar la estructura de directorios necesaria para imports
-# ScrapperNode hereda de base_node.node.Node y usa base_node.utils
-COPY base_node ./base_node
-
-# Copiar el código del scrapper (scrapper/utils ya no es necesario, está en base_node)
-COPY scrapper/scrapper_main.py scrapper/scrapper.py ./scrapper/
-
+# El código fuente se monta como volumen en tiempo de ejecución.
 # Definir variables de entorno
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONPATH=/app
