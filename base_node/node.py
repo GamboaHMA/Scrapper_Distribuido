@@ -1299,8 +1299,8 @@ class Node:
             logging.debug("my_boss_profile_conn NULO")
         
         # 1. Verificar jefe (si soy subordinado)
-        if not self.i_am_boss and self.my_boss_profile.connection:
-            if not self.my_boss_profile.connection.is_connected():
+        if not self.i_am_boss:
+            if self.my_boss_profile.connection is None or not self.my_boss_profile.connection.is_connected():
                 boss_ip = self.my_boss_profile.connection.ip
                 logging.warning(f"⚠️ Jefe {self.my_boss_profile.connection.node_id} desconectado")
                 logging.warning("🗳️ Iniciando elecciones para encontrar nuevo jefe...")
