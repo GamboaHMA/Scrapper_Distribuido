@@ -1106,21 +1106,23 @@ class Node:
                     'ip': client_ip,
                     'port': client_port  # Puerto correcto del cliente externo
                 }
+
+            
                 
                 logging.info(f"Cliente externo {client_node_type} {client_ip} agregado")
                 logging.debug(f"Cache actualizado: {self.external_bosses_cache}")
                 
                 # Enviar identificación como jefe
-                conn.send_message(
-                    self._create_message(
-                        MessageProtocol.MESSAGE_TYPES['IDENTIFICATION'],
-                        data={
-                            'ip': self.ip,
-                            'port': self.port,
-                            'is_boss': self.i_am_boss
-                        }
-                    )
-                )
+                # conn.send_message(
+                #     self._create_message(
+                #         MessageProtocol.MESSAGE_TYPES['IDENTIFICATION'],
+                #         data={
+                #             'ip': self.ip,
+                #             'port': self.port,
+                #             'is_boss': self.i_am_boss
+                #         }
+                #     )
+                # )
                 
                 # Iniciar heartbeats
                 # threading.Thread(
@@ -1131,6 +1133,16 @@ class Node:
                 
                 # Replicar información de jefes externos a subordinados
                 self.replicate_external_bosses_info()
+
+                boss_profile = self.external_bosses[client_node_type]
+                if boss_profile.is_connected():
+                    logging.warning(f"Ya existe conexión con jefe {client_node_type}")
+                    return
+                
+                boss_profile.set_connection(conn)
+                logging.info(f"✓ Conexión con jefe {client_node_type} establecida exitosamente")
+
+
                 
                 return True
             else:
