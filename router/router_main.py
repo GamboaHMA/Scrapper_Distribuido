@@ -201,7 +201,41 @@ class RouterNode(Node):
             self._handle_boss_no_router_reunification
         )
 
+        self.add_persistent_message_handler(
+            MessageProtocol.MESSAGE_TYPES['DB_IP_QUERY'],
+            self._handle_db_ip_query
+        )
+
+
         logging.debug("Handlers del router registrados")
+
+    def _handle_db_ip_query(self, node_connection:NodeConnection, message):
+        '''
+        Recibe un mensaje de jefe scrapper solicitando ip del nodo bd actual
+        '''
+        logging.info(f"Peticion de base de datos ip por {node_connection.ip}: {message}")
+        
+        #Reenviar mensaje al scrapper con la ip del bd
+        boss_profile = self.external_bosses['bd']
+        if boss_profile.connection is not None and boss_profile.is_connected():
+            response = self._create_message(
+                MessageProtocol.MESSAGE_TYPES['DB_IP_QUERY_RESPONSE'],
+                {
+                    'ip': boss_profile.connection.ip,
+                    'exists': True
+                }
+            )
+        
+        else:
+            response = self._create_message(
+                MessageProtocol.MESSAGE_TYPES['DB_IP_QUERY_RESPONSE'],
+                {
+                    'exists': False
+                }
+            )
+            
+        node_connection.send_message(response)
+
         
     def _handle_boss_no_router_reunification(self, sock, client_ip, message):
         logging.info(f"Boss no router reunification message received from {client_ip}: {message}")
@@ -1035,6 +1069,10 @@ class RouterNode(Node):
             name="NetworkReunification"
         ).start()
         
+        threading.Thread(
+            target=self.replicate_external_bosses_info()
+        )
+
         logging.info("✓ Jefe Router operativo")
     
     def stop_boss_tasks(self):

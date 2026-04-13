@@ -11,6 +11,7 @@ from .scrapper import get_html_from_url
 from base_node.utils import NodeConnection, MessageProtocol, BossProfile
 from base_node.node import compare_ips
 
+DB_IP_QUERY_TIME_INTREVAL = 5
 
 # Por defecto INFO, pero se puede cambiar con LOG_LEVEL=DEBUG
 log_level = os.environ.get('LOG_LEVEL', 'INFO').upper()
@@ -187,9 +188,32 @@ class ScrapperNode(Node):
             MessageProtocol.MESSAGE_TYPES['TASK_REJECTION'],
             self._handle_task_rejected_persistent
         )
+        self.add_persistent_message_handler(
+            MessageProtocol.MESSAGE_TYPES['DB_IP_QUERY_RESPONSE'],
+            self._handler_db_ip_query_response
+        )
     
     # ============= OVERRIDES DE MÉTODOS DE Node BASE =============
     
+    def _handler_db_ip_query_response(self, node_connection, message):
+        '''
+        recibe respuesta del nodo router, en la key exists, viene si tiene conexion con una base de datos o no,
+        en caso de que sea True el valor de la llave exists, entonces se conecta con el metodo connect_to_external_boss
+        a la base de datos
+        '''
+
+        data = message.get('data', {})
+        exists = data.get('exists', False)
+
+        if exists:
+            ip = data.get('ip')
+            self._connect_to_boss('bd', ip)
+        else:
+            logging.info(f"el jefe router {node_connection.ip} no esta conectado a ningun jefe base de datos...")
+
+
+
+
     def reassign_tasks_from_subordinate(self, node_id):
         """
         Override: Reasigna tareas del subordinado muerto.
@@ -933,6 +957,25 @@ class ScrapperNode(Node):
         # Loop de reunificación: detecta otros jefes scrapper cuando la red se reconecta
         # threading.Thread(target=self._scrapper_reunification_loop, daemon=True, name="ScrapperReunification").start()
         
+        def keep_database_touching():
+            while self.running and self.i_am_boss:
+                boss_profile = self.external_bosses['bd']
+                if boss_profile.connection is None and not boss_profile.is_connected():
+                    message = self._create_message( 
+                        MessageProtocol.MESSAGE_TYPES['DB_IP_QUERY'],{})
+
+                    ro_boss_profile = self.external_bosses['router']
+                    if ro_boss_profile.connection and ro_boss_profile.is_connected():
+                        ro_boss_profile.connection.send_message(message)
+                
+                time.sleep(DB_IP_QUERY_TIME_INTREVAL)
+            logging.info("deje de correr, o de ser jefe, deteniendo hilo geep_database_touching")
+
+        threading.Thread(
+            target=keep_database_touching,
+            daemon=True
+        ).start()
+
         logging.info("✓ Jefe Scrapper operativo")
     
     def _scrapper_reunification_loop(self):

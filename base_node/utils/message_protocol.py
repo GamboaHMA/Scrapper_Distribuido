@@ -26,6 +26,8 @@ class MessageProtocol:
         'TASK_REJECTION': 'task_rejection',
         'ELECTION_RESPONSE': 'election_response',
         'NEW_BOSS': 'new_boss',
+        'DB_IP_QUERY': 'db_ip_query',
+        'DB_IP_QUERY_RESPONSE': 'db_ip_query_response',
         
         # TASK MANAGEMENT (Router <-> Scrapper)
         'NEW_TASK': 'new_task',

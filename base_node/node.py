@@ -1700,7 +1700,7 @@ class Node:
             logging.info("Iniciando tareas de jefe...")
             # Aquí irían las tareas específicas del jefe
             # Ejemplo: iniciar asignación de tareas, monitoreo, etc.
-            pass
+            
     
     def stop_boss_tasks(self):
         """
