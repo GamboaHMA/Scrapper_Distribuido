@@ -1287,6 +1287,12 @@ class Node:
         si no recibe heartbeats, por lo que solo necesitamos verificar is_connected().
         """
         dead_nodes = []
+        logging.debug(f"Entrando a cleanup_dead_nodes im_boss: {self.i_am_boss} ")
+
+        if self.my_boss_profile.connection:
+            logging.debug(f"my_boss_profile_conn: {self.my_boss_profile.connection.ip}")
+        else:
+            logging.debug("my_boss_profile_conn NULO")
         
         # 1. Verificar jefe (si soy subordinado)
         if not self.i_am_boss and self.my_boss_profile.connection:
@@ -1349,31 +1355,32 @@ class Node:
         with self.bosses_connections_lock:
             snapshot = list(self.bosses_connections.items())
         
-        for node_type, conn in snapshot:
-            if conn and not conn.is_connected():
-                boss_ip = conn.ip
-                boss_port = conn.port
-                
-                with self.bosses_connections_lock:
-                    # Solo actuar si la conexión en el dict sigue siendo la misma (evitar race con _connect_to_external_boss)
-                    if self.bosses_connections.get(node_type) is not conn:
-                        continue  # Ya fue reemplazada, ignorar
-                    logging.warning(f"Jefe {node_type} desconectado")
-                    conn.disconnect()
-                    del self.bosses_connections[node_type]
-                
-                logging.info(f"Conexión con jefe de {node_type} cerrada. Reintentando en 3s...")
+        if self.i_am_boss:
+            for node_type, conn in snapshot:
+                if conn and not conn.is_connected():
+                    boss_ip = conn.ip
+                    boss_port = conn.port
+                    
+                    with self.bosses_connections_lock:
+                        # Solo actuar si la conexión en el dict sigue siendo la misma (evitar race con _connect_to_external_boss)
+                        if self.bosses_connections.get(node_type) is not conn:
+                            continue  # Ya fue reemplazada, ignorar
+                        logging.warning(f"Jefe {node_type} desconectado")
+                        conn.disconnect()
+                        del self.bosses_connections[node_type]
+                    
+                    logging.info(f"Conexión con jefe de {node_type} cerrada. Reintentando en 3s...")
 
-                # Reintentar conexión con delay para resolver race condition de
-                # conexión mutua simultánea al inicio o tras reunificación.
-                def _retry_external_boss(nt=node_type, bip=boss_ip, bport=boss_port):
-                    time.sleep(3)
-                    if self.running and nt not in self.bosses_connections and self.i_am_boss:
-                        logging.info(f"🔄 Reintentando conexión con jefe externo {nt} ({bip}:{bport})...")
-                        self._connect_to_external_boss(nt, bip, bport)
+                    # Reintentar conexión con delay para resolver race condition de
+                    # conexión mutua simultánea al inicio o tras reunificación.
+                    def _retry_external_boss(nt=node_type, bip=boss_ip, bport=boss_port):
+                        time.sleep(3)
+                        if self.running and nt not in self.bosses_connections and self.i_am_boss:
+                            logging.info(f"🔄 Reintentando conexión con jefe externo {nt} ({bip}:{bport})...")
+                            self._connect_to_external_boss(nt, bip, bport)
 
-                threading.Thread(target=_retry_external_boss, daemon=True).start()
-                        
+                    threading.Thread(target=_retry_external_boss, daemon=True).start()
+                            
     def reassign_tasks_from_subordinate(self, node_id):
         """
         Reasigna las tareas que estaban asignadas a un subordinado que ha muerto.
@@ -1575,7 +1582,7 @@ class Node:
             
             # Ignorar heartbeats en conexiones temporales (se manejan en NodeConnection)
             if msg_type == MessageProtocol.MESSAGE_TYPES['HEARTBEAT']:
-                logging.debug(f"Heartbeat recibido de {client_ip} en conexión temporal (ignorado)")
+                #logging.debug(f"Heartbeat recibido de {client_ip} en conexión temporal (ignorado)")
                 return  # No cerrar el socket, simplemente retornar
             
             # handler para procesar mensaje
