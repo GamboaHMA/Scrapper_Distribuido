@@ -474,7 +474,18 @@ class Node:
                     logging.info(f"Asumiendo nuevo jefe {new_boss_node_type} {new_boss_ip}:{new_boss_port}")
                     self._connect_to_external_boss(new_boss_node_type, new_boss_ip, new_boss_port)
 
-    
+
+    def disconnect_from_subordinates(self):
+        '''
+        Se desconecta de todos los subordinados actuales
+        '''
+        if len(self.subordinates.keys()) == 0:
+            return
+
+        for sub, conn in self.subordinates.items():
+            conn.disconnect()
+
+            
     def _connect_to_external_boss(self, boss_type, boss_ip, boss_port):
         """
         Conecta con un jefe externo y actualiza el cache.
@@ -1705,7 +1716,9 @@ class Node:
         self.i_am_boss = False  # Asegurar que el estado de jefe se actualice
         # Implementación base: no hace nada
         # Las subclases deben sobrescribir este método
-        pass
+
+        self.disconnect_from_subordinates()
+
         
     def call_elections(self):
         """

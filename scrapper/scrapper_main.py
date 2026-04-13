@@ -1046,6 +1046,7 @@ class ScrapperNode(Node):
         logging.info("✓ Tareas de jefe Scrapper detenidas")
 
         self.i_am_boss = False
+        self.disconnect_from_subordinates()
 
 
 
