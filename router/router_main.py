@@ -1276,10 +1276,28 @@ class RouterNode(Node):
                     {
                         'is_boss': True,
                         'i_will_demote': True,
-                        'my_ip': self.ip
+                        'boss_ip': self.ip
                     }
                 )
+
+                # creo node connection
+                conn = NodeConnection(
+                    self.node_type,
+                    client_ip,
+                    self.port,
+                    on_message_callback=self._handle_message_from_node,
+                    sender_node_type=self.node_type,
+                    sender_id=self.node_id
+                )
+
+                if not conn.connect():
+                    logging.error(f"✗ No se pudo establecer conexión persistente con {client_ip} desde handle_leader_query")
+                    self.boss_connection = None
+                    return
+
+                self.my_boss_profile.set_connection(conn) 
                 
+
                 # Ceder jefatura y notificar subordinados
                 threading.Thread(
                     target=self._demote_and_reunify,
@@ -1424,6 +1442,8 @@ class RouterNode(Node):
             logging.info(f"🎉 Reunificación completada - Ahora soy subordinado de {new_boss_ip}")
         else:
             logging.error(f"❌ No se pudo confirmar nuevo jefe {new_boss_ip}")
+
+        #self.my_boss_profile
 
     def _handle_new_boss_persistent(self, node_connection, message):
         """
