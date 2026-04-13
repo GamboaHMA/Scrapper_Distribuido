@@ -1964,12 +1964,12 @@ class Node:
             # self.connect_to_discovered_nodes("bd")
 
             # hilo para que se reconecte con el jefe bd
-            if self.node_type == 'scrapper' and self.i_am_boss:
-                threading.Thread(
-                    target=self.mantener_conex_con_bd_boss,
-                    daemon=True,
-                    name='mantener-conex-con-bd-boss'
-                ).start()
+            # if self.node_type == 'scrapper' and self.i_am_boss:
+            #     threading.Thread(
+            #         target=self.mantener_conex_con_bd_boss,
+            #         daemon=True,
+            #         name='mantener-conex-con-bd-boss'
+            #     ).start()
 
         else:
             logging.info(f"✓ Soy subordinado {self.node_type}, conectado al jefe en {self.boss_connection.ip if self.boss_connection else 'desconocido'}")

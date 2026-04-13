@@ -64,6 +64,9 @@ class NodeConnection:
         self.heartbeat_timeout = 15  # Segundos para timeout de heartbeat
         
         logging.debug(f"NodeConnection creada para {self.node_id}")
+
+    def __str__(self):
+        return f"remoto: {self.node_id}, \nlocal: {self.sender_node_type} , {self.sender_id} "
     
     def connect(self, existing_socket=None):
         """

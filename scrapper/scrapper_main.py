@@ -207,7 +207,10 @@ class ScrapperNode(Node):
 
         if exists:
             ip = data.get('ip')
-            self._connect_to_boss('bd', ip)
+            if self.external_bosses_cache['bd']['ip'] != ip:
+                self._connect_to_boss('bd', ip)
+                if self.external_bosses_cache['bd']:
+                    self.external_bosses_cache['bd'] = { 'ip': ip, 'port': 9090}
         else:
             logging.info(f"el jefe router {node_connection.ip} no esta conectado a ningun jefe base de datos...")
 
@@ -905,6 +908,22 @@ class ScrapperNode(Node):
             logging.warning(f"Ya existe conexión con jefe {node_type}")
             return
         
+        if not hasattr(self, 'bosses_connections_lock'):
+            self.bosses_connections_lock = threading.Lock()
+        
+        with self.bosses_connections_lock:
+            if node_type in self.bosses_connections:
+                existing_conn = self.bosses_connections[node_type]
+                if existing_conn.ip == boss_ip and existing_conn.is_connected():
+                    logging.debug(f"(connect_to_boss) Ya existe conexión activa con jefe {node_type} en {boss_ip}")
+                    return
+                else:
+                    # IP diferente o conexión muerta, cerrar la antigua
+                    logging.info(f"Cerrando conexión antigua con jefe {node_type}")
+                    existing_conn.disconnect()
+                    del self.bosses_connections[node_type]
+
+
         # Crear nueva conexión
         new_connection = NodeConnection(
             node_type,
@@ -917,6 +936,8 @@ class ScrapperNode(Node):
         
         if new_connection.connect():
             logging.info(f"Conectado con jefe {node_type} en {boss_ip}")
+
+            self.bosses_connections[node_type] = new_connection
             
             # Enviar identificación inicial (NO temporal, es conexión persistente)
             identification = self._create_message(
@@ -959,14 +980,42 @@ class ScrapperNode(Node):
         
         def keep_database_touching():
             while self.running and self.i_am_boss:
+                logging.debug(f"Entrando a hilo de keep_database_touching")
                 boss_profile = self.external_bosses['bd']
-                if boss_profile.connection is None and not boss_profile.is_connected():
+                logging.debug(f"{boss_profile.connection}")
+                if boss_profile.connection:
+                    logging.debug(f"node connection para router is_connected: {boss_profile.connection.is_connected()}") 
+                if boss_profile.connection == None or not boss_profile.connection.is_connected():
                     message = self._create_message( 
                         MessageProtocol.MESSAGE_TYPES['DB_IP_QUERY'],{})
+                    
+                    ro_boss_conn = None
+                    db_boss_conn = None
+                    
+                    logging.debug("entro a crear el message")
+                    for node_type, connection in self.bosses_connections.items():
+                        logging.debug(f"llave: {node_type}, conn: {connection}, connection: {connection.connected}")
+                        if node_type == 'router':
+                            ro_boss_conn = connection
+                        if node_type == 'db':
+                            db_boss_conn = connection
 
-                    ro_boss_profile = self.external_bosses['router']
-                    if ro_boss_profile.connection and ro_boss_profile.is_connected():
-                        ro_boss_profile.connection.send_message(message)
+                    logging.debug(f"Externals bosses:")
+                    for extern in self.external_bosses.keys():
+                        logging.debug(f"llave: {extern}")
+                    
+                    logging.debug(f"Externals_bosses_cache")
+                    for extern, value in self.external_bosses_cache.items():
+                        logging.debug(f"external: {extern}, value: {value}")
+
+
+                    if ro_boss_conn != None:
+                        logging.debug("entro al ro_boss_conn != None")
+                        if ro_boss_conn.connected:
+                            logging.debug("entro a ro_boss_conn.connected")
+                            if db_boss_conn == None:
+                                ro_boss_conn.send_message(message)
+                                logging.debug(f"enviado mensaje: {message} a {ro_boss_conn.ip}")
                 
                 time.sleep(DB_IP_QUERY_TIME_INTREVAL)
             logging.info("deje de correr, o de ser jefe, deteniendo hilo geep_database_touching")
