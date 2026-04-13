@@ -962,7 +962,7 @@ class RouterNode(Node):
                 
                 # Enviar información de OTROS jefes externos que conocemos
                 # Esto permite que todos los jefes conozcan las IPs de todos los demás
-                self._send_other_bosses_info(node_type, new_connection)
+                #self._send_other_bosses_info(node_type, new_connection)
                 
                 # Iniciar heartbeats
                 # threading.Thread(
