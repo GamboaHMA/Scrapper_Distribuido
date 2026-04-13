@@ -831,8 +831,8 @@ class Node:
         
         # Solo iniciar elecciones si no soy jefe todavía
         # Si ya soy jefe, no es necesario (y podría disrumpir conexiones activas)
-        if not self.i_am_boss:
-            threading.Thread(target=self.call_elections, daemon=True).start()
+
+        threading.Thread(target=self.call_elections, daemon=True).start()
     
     def _handle_new_boss_message(self, sock, client_ip, message):
         """
