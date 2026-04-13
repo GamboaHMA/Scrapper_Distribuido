@@ -1313,7 +1313,7 @@ class Node:
         if not self.i_am_boss:
             if self.my_boss_profile.connection is None:
                 # Iniciar proceso de elección
-                logging.warning(f"⚠️ Jefe {self.my_boss_profile.connection.node_id} desconectado")
+                logging.warning(f"⚠️ Jefe desconectado")
                 logging.warning("🗳️ Iniciando elecciones para encontrar nuevo jefe...(my_boss_profile is None)")
 
                 threading.Thread(target=self.call_elections, daemon=True).start()
