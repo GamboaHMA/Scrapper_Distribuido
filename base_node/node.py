@@ -533,7 +533,7 @@ class Node:
                 )
 
                 if self.node_type == boss_type:
-                    self.my_boss_profile.connection = conn
+                    self.my_boss_profile.set_connection(conn)
                 
                 # Replicar info a subordinados
                 self.replicate_external_bosses_info()
