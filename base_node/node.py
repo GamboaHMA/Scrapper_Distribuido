@@ -466,6 +466,7 @@ class Node:
                     }
                 )
                 self.broadcast_to_subordinates(subordinates_message)
+
                 self.stop_boss_tasks()
 
                 # Asumir el nuevo jefe
@@ -530,6 +531,9 @@ class Node:
                         }
                     )
                 )
+
+                if self.node_type == boss_type:
+                    self.my_boss_profile.connection = conn
                 
                 # Replicar info a subordinados
                 self.replicate_external_bosses_info()
