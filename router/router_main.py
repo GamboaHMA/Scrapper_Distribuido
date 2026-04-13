@@ -1420,28 +1420,48 @@ class RouterNode(Node):
         logging.info(f"Notificando a nuevo jefe {new_boss_ip}:{self.port} que he cedido...")
         
         # Enviar identificación temporal para confirmar que cedimos
-        identification = self._create_message(
-            MessageProtocol.MESSAGE_TYPES['IDENTIFICATION'],
-            {
-                'node_port': self.port,
-                'is_boss': self.i_am_boss,
-                'is_temporary': True  # Solo notificación, no conexión persistente
-            }
-        )
+        # identification = self._create_message(
+        #     MessageProtocol.MESSAGE_TYPES['IDENTIFICATION'],
+        #     {
+        #         'node_port': self.port,
+        #         'is_boss': self.i_am_boss,
+        #         'is_temporary': True  # Solo notificación, no conexión persistente
+        #     }
+        # )
         
-        response = self.send_temporary_message(
+        # response = self.send_temporary_message(
+        #     new_boss_ip,
+        #     self.port,
+        #     identification,
+        #     expect_response=True,
+        #     timeout=5
+        # )
+
+        conn = NodeConnection(
+            self.node_type,
             new_boss_ip,
             self.port,
-            identification,
-            expect_response=True,
-            timeout=5
+            on_message_callback=self._handle_message_from_node,
+            sender_node_type=self.node_type,
+            sender_id=self.node_id
         )
-        
-        if response and isinstance(response, dict) and response.get('data', {}).get('is_boss'):
-            logging.info(f"✓ Nuevo jefe {new_boss_ip} confirmado - esperando que me adopte como subordinado")
-            logging.info(f"🎉 Reunificación completada - Ahora soy subordinado de {new_boss_ip}")
-        else:
+
+        if not conn.connect():
             logging.error(f"❌ No se pudo confirmar nuevo jefe {new_boss_ip}")
+            self.boss_connection = None
+            return
+
+        self.my_boss_profile.set_connection(conn) 
+        logging.info(f"✓ Nuevo jefe {new_boss_ip} confirmado - conectandome a el con node_connection")
+        logging.info(f"🎉 Reunificación completada - Ahora soy subordinado de {new_boss_ip}")
+               
+
+        
+        # if response and isinstance(response, dict) and response.get('data', {}).get('is_boss'):
+        #     logging.info(f"✓ Nuevo jefe {new_boss_ip} confirmado - esperando que me adopte como subordinado")
+        #     logging.info(f"🎉 Reunificación completada - Ahora soy subordinado de {new_boss_ip}")
+        # else:
+        #     logging.error(f"❌ No se pudo confirmar nuevo jefe {new_boss_ip}")
 
         #self.my_boss_profile
 
