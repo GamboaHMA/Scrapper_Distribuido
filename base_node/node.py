@@ -1319,8 +1319,6 @@ class Node:
                     # Desconectar del jefe muerto
                     self.my_boss_profile.connection.disconnect()
                     self.my_boss_profile.clear_connection()
-                    boss_ip = self.my_boss_profile.connection.ip
-                    self.remove_node_from_registry(self.node_type, boss_ip)
 
                 threading.Thread(target=self.call_elections, daemon=True).start()
 
