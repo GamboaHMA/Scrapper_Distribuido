@@ -1305,7 +1305,7 @@ class Node:
         logging.debug(f"Entrando a cleanup_dead_nodes im_boss: {self.i_am_boss} ")
 
         if self.my_boss_profile.connection:
-            logging.debug(f"my_boss_profile_conn: {self.my_boss_profile.connection.ip}")
+            logging.debug(f"my_boss_profile_conn: {self.my_boss_profile.connection}")
         else:
             logging.debug("my_boss_profile_conn NULO")
         
