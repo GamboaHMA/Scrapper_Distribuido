@@ -166,7 +166,7 @@ class Node:
         sender_id = message_dict.get('sender_id')
         data = message_dict.get('data', {})
         
-        logging.debug(f"Mensaje recibido de {sender_id}: {msg_type}")
+        #logging.debug(f"Mensaje recibido de {sender_id}: {msg_type}")
         
         handler = self.persistent_message_handler.get(msg_type)
         if handler:

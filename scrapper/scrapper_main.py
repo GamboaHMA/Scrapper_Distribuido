@@ -207,10 +207,13 @@ class ScrapperNode(Node):
 
         if exists:
             ip = data.get('ip')
-            if self.external_bosses_cache['bd']['ip'] != ip:
-                self._connect_to_boss('bd', ip)
-                if self.external_bosses_cache['bd']:
+            if 'bd' in self.external_bosses_cache.keys():
+                if self.external_bosses_cache['bd']['ip'] != ip:
+                    self._connect_to_boss('bd', ip)
                     self.external_bosses_cache['bd'] = { 'ip': ip, 'port': 9090}
+            else:
+                self._connect_to_boss('bd', ip)
+                self.external_bosses_cache['bd'] = { 'ip': ip, 'port': 9090}
         else:
             logging.info(f"el jefe router {node_connection.ip} no esta conectado a ningun jefe base de datos...")
 
