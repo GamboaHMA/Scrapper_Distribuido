@@ -1789,24 +1789,24 @@ class Node:
         
         # Limpiar subordinados antiguos (heredados de replicación del jefe anterior)
         # Esto es crítico en caso de partición de red
-        old_subordinates = list(self.subordinates.keys())
-        if old_subordinates:
-            logging.info(f"🧹 Limpiando {len(old_subordinates)} subordinados antiguos heredados...")
-            for node_id in old_subordinates:
-                conn = self.subordinates[node_id]
+        # old_subordinates = list(self.subordinates.keys())
+        # if old_subordinates:
+        #     logging.info(f"🧹 Limpiando {len(old_subordinates)} subordinados antiguos heredados...")
+        #     for node_id in old_subordinates:
+        #         conn = self.subordinates[node_id]
                 
-                # Reasignar tareas antes de desconectar
-                reassigned = self.reassign_tasks_from_subordinate(node_id)
+        #         # Reasignar tareas antes de desconectar
+        #         reassigned = self.reassign_tasks_from_subordinate(node_id)
                 
-                conn.disconnect()
-                logging.info(f"  ✓ Subordinado antiguo {node_id} desconectado")
+        #         conn.disconnect()
+        #         logging.info(f"  ✓ Subordinado antiguo {node_id} desconectado")
             
-            # Limpiar diccionario
-            self.subordinates.clear()
-            logging.info("✅ Limpieza de subordinados completada")
+        #     # Limpiar diccionario
+        #     self.subordinates.clear()
+        #     logging.info("✅ Limpieza de subordinados completada")
             
-            # Esperar un tiempo para que todos los nodos procesen la desconexión del jefe anterior
-            time.sleep(2)
+        #     # Esperar un tiempo para que todos los nodos procesen la desconexión del jefe anterior
+        #     time.sleep(2)
         
         # Limpiar información de jefes externos heredada del jefe anterior
         # Esta info es obsoleta - como nuevo jefe descubriré a los jefes externos actuales
