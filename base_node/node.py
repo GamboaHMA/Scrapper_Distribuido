@@ -538,7 +538,7 @@ class Node:
                         {
                             'ip': self.ip,
                             'port': self.port,
-                            'is_boss': True
+                            'is_boss': self.i_am_boss
                         }
                     )
                 )
@@ -588,7 +588,7 @@ class Node:
                     MessageProtocol.MESSAGE_TYPES['IDENTIFICATION'],
                     {
                         'node_port': self.port,
-                        'is_boss': True,
+                        'is_boss': self.i_am_boss,
                         'is_temporary': True
                     }
                 )
@@ -768,7 +768,7 @@ class Node:
                 MessageProtocol.MESSAGE_TYPES['IDENTIFICATION'],
                 {
                     'node_port': self.port,
-                    'is_boss': False,  # Ahora soy subordinado
+                    'is_boss': self.i_am_boss,  # Ahora soy subordinado
                     'is_temporary': False  # Conexión persistente
                 }
             )
@@ -906,7 +906,7 @@ class Node:
                     data={
                         'ip': self.ip,
                         'port': self.port,
-                        'is_boss': False,
+                        'is_boss': self.i_am_boss,
                         'is_temporary': False
                     }
                 )
@@ -1000,7 +1000,7 @@ class Node:
                     data={
                         'ip': self.ip,
                         'port': self.port,
-                        'is_boss': True
+                        'is_boss': self.i_am_boss
                     }
                 )
             )
@@ -1117,7 +1117,7 @@ class Node:
                         data={
                             'ip': self.ip,
                             'port': self.port,
-                            'is_boss': True
+                            'is_boss': self.i_am_boss
                         }
                     )
                 )
@@ -2025,7 +2025,7 @@ class Node:
                                 {
                                     'ip': self.ip,
                                     'port': self.port,
-                                    'is_boss': True
+                                    'is_boss': self.i_am_boss
                                 }
                             )
                         )

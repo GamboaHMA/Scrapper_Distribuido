@@ -1368,7 +1368,7 @@ class RouterNode(Node):
             MessageProtocol.MESSAGE_TYPES['IDENTIFICATION'],
             {
                 'node_port': self.port,
-                'is_boss': False,
+                'is_boss': self.i_am_boss,
                 'is_temporary': True  # Solo notificación, no conexión persistente
             }
         )

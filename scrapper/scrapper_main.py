@@ -900,7 +900,7 @@ class ScrapperNode(Node):
                 {
                     'ip': self.ip,
                     'port': self.port,
-                    'is_boss': True,  # _connect_to_boss es siempre jefe-a-jefe
+                    'is_boss': self.i_am_boss,  # _connect_to_boss es siempre jefe-a-jefe
                     'is_temporary': False
                 }
             )

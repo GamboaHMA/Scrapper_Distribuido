@@ -2241,7 +2241,7 @@ class DatabaseNode(Node):
                     MessageProtocol.MESSAGE_TYPES['IDENTIFICATION'],
                     {
                         'is_temporary': False,
-                        'is_boss': True,  # _connect_to_boss es siempre jefe-a-jefe
+                        'is_boss': self.i_am_boss,  # _connect_to_boss es siempre jefe-a-jefe
                         'port': self.port
                     }
                 )
