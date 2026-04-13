@@ -68,22 +68,22 @@ network-clean: ## Eliminar la red scrapper-network
 
 build-scrapper: ## Construir imagen de ScrapperNode
 	@echo "$(YELLOW)Construyendo ScrapperNode...$(NC)"
-	docker build --no-cache -t $(SCRAPPER_NODE_IMAGE) -f scrapper/Dockerfile .
+	docker build -t $(SCRAPPER_NODE_IMAGE) -f scrapper/Dockerfile .
 	@echo "$(GREEN)✅ ScrapperNode construido$(NC)"
 
 build-router: ## Construir imagen de RouterNode
 	@echo "$(YELLOW)Construyendo RouterNode...$(NC)"
-	docker build --no-cache -t $(ROUTER_NODE_IMAGE) -f router/Dockerfile .
+	docker build -t $(ROUTER_NODE_IMAGE) -f router/Dockerfile .
 	@echo "$(GREEN)✅ RouterNode construido$(NC)"
 
 build-database: ## Construir imagen de DatabaseNode
 	@echo "$(YELLOW)Construyendo DatabaseNode...$(NC)"
-	docker build --no-cache -t $(DATABASE_NODE_IMAGE) -f database/Dockerfile .
+	docker build -t $(DATABASE_NODE_IMAGE) -f database/Dockerfile .
 	@echo "$(GREEN)✅ DatabaseNode construido$(NC)"
 
 build-client: ## Construir imagen del Cliente
 	@echo "$(YELLOW)Construyendo Cliente...$(NC)"
-	docker build --no-cache -t $(CLIENT_IMAGE) -f client/Dockerfile .
+	docker build -t $(CLIENT_IMAGE) -f client/Dockerfile .
 	@echo "$(GREEN)✅ Cliente construido$(NC)"
 
 build-streamlit: ## Construir imagen de Streamlit UI
@@ -93,7 +93,7 @@ build-streamlit: ## Construir imagen de Streamlit UI
 
 build-web-client: ## Construir imagen del Cliente Web
 	@echo "$(YELLOW)Construyendo Cliente Web...$(NC)"
-	docker build --no-cache -t $(WEB_CLIENT_IMAGE) -f web_client/Dockerfile .
+	docker build -t $(WEB_CLIENT_IMAGE) -f web_client/Dockerfile .
 	@echo "$(GREEN)✅ Cliente Web construido$(NC)"
 
 build-all: build-scrapper build-router build-database build-client build-web-client ## Construir todas las imágenes
@@ -114,6 +114,8 @@ run-scrapper: network ## Ejecutar 1 ScrapperNode
 		--network $(NETWORK_NAME) \
 		--network-alias scrapper \
 		-e LOG_LEVEL=DEBUG \
+		-v $(CURDIR)/base_node:/app/base_node \
+		-v $(CURDIR)/scrapper:/app/scrapper \
 		$(SCRAPPER_NODE_IMAGE); \
 	echo "$(GREEN)✅ ScrapperNode $$NEXT_NUM iniciado$(NC)"
 
@@ -124,6 +126,8 @@ run-scrappers: network ## Ejecutar 2 ScrapperNodes (por defecto)
 			--network $(NETWORK_NAME) \
 			--network-alias scrapper \
 			-e LOG_LEVEL=DEBUG \
+			-v $(CURDIR)/base_node:/app/base_node \
+			-v $(CURDIR)/scrapper:/app/scrapper \
 			$(SCRAPPER_NODE_IMAGE); \
 		echo "$(GREEN)✅ ScrapperNode $$i iniciado$(NC)"; \
 	done
@@ -137,6 +141,8 @@ run-router: network ## Ejecutar 1 RouterNode
 		--network $(NETWORK_NAME) \
 		--network-alias router \
 		-e LOG_LEVEL=DEBUG \
+		-v $(CURDIR)/base_node:/app/base_node \
+		-v $(CURDIR)/router:/app/router \
 		$(ROUTER_NODE_IMAGE); \
 	echo "$(GREEN)✅ RouterNode $$NEXT_NUM iniciado$(NC)"
 
@@ -147,6 +153,8 @@ run-routers: network ## Ejecutar 2 RouterNodes (por defecto)
 			--network $(NETWORK_NAME) \
 			--network-alias router \
 			-e LOG_LEVEL=DEBUG \
+			-v $(CURDIR)/base_node:/app/base_node \
+			-v $(CURDIR)/router:/app/router \
 			$(ROUTER_NODE_IMAGE); \
 		echo "$(GREEN)✅ RouterNode $$i iniciado$(NC)"; \
 	done
@@ -160,7 +168,8 @@ run-database: network ## Ejecutar 1 DatabaseNode
 		--network $(NETWORK_NAME) \
 		--network-alias bd \
 		-e LOG_LEVEL=DEBUG \
-		-v database-data-$$NEXT_NUM:/app/database \
+		-v $(CURDIR)/base_node:/app/base_node \
+		-v $(CURDIR)/database:/app/database \
 		$(DATABASE_NODE_IMAGE); \
 	echo "$(GREEN)✅ DatabaseNode $$NEXT_NUM iniciado$(NC)"
 
@@ -171,7 +180,8 @@ run-databases: network ## Ejecutar 2 DatabaseNodes (por defecto)
 			--network $(NETWORK_NAME) \
 			--network-alias bd \
 			-e LOG_LEVEL=DEBUG \
-			-v database-data-$$i:/app/database \
+			-v $(CURDIR)/base_node:/app/base_node \
+			-v $(CURDIR)/database:/app/database \
 			$(DATABASE_NODE_IMAGE); \
 		echo "$(GREEN)✅ DatabaseNode $$i iniciado$(NC)"; \
 	done
@@ -182,6 +192,8 @@ run-client: network ## Ejecutar 1 Cliente interactivo
 		--network $(NETWORK_NAME) \
 		--entrypoint /bin/bash \
 		-e LOG_LEVEL=DEBUG \
+		-v $(CURDIR)/base_node:/app/base_node \
+		-v $(CURDIR)/client:/app/client \
 		$(CLIENT_IMAGE) -c "tail -f /dev/null"
 	@echo "$(GREEN)✅ Cliente iniciado$(NC)"
 	@echo "$(YELLOW)Para usar el cliente ejecuta:$(NC)"
@@ -208,6 +220,8 @@ run-web-client: network ## Ejecutar Cliente Web (accesible en http://localhost:8
 		-e ROUTER_PORT=7070 \
 		-e WEB_PORT=8080 \
 		-e LOG_LEVEL=DEBUG \
+		-v $(CURDIR)/base_node:/app/base_node \
+		-v $(CURDIR)/web_client:/app/web_client \
 		$(WEB_CLIENT_IMAGE)
 	@echo "$(GREEN)✅ Cliente Web iniciado$(NC)"
 	@echo "$(YELLOW)Accede a la interfaz en:$(NC) http://localhost:8080"

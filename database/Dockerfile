@@ -8,11 +8,7 @@ COPY database/requirements.txt ./database/requirements.txt
 # Instalar dependencias
 RUN pip install --no-cache-dir -r ./database/requirements.txt
 
-# Copiar base_node (desde raíz del proyecto - incluye utils)
-COPY base_node ./base_node
-
-# Copiar archivos del database
-COPY database/database.py ./database/database.py
+# El código fuente se monta como volumen en tiempo de ejecución.
 
 # Variables de entorno
 ENV PYTHONUNBUFFERED=1

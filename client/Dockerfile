@@ -2,7 +2,7 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Copiar archivos necesarios
+# El código fuente se monta como volumen en tiempo de ejecución.
 COPY base_node/ /app/base_node/
 COPY client/client.py /app/client/client.py
 
