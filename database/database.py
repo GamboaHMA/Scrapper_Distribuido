@@ -158,6 +158,8 @@ class DatabaseNode(Node):
         
         logging.info("✓ Tareas de jefe BD detenidas")
 
+        self.i_am_boss = False
+
     def _monitor_subordinates_health(self):
         """Monitor periódico para detectar subordinados desconectados y re-replicar datos"""
         check_interval = 30  # Verificar cada 30 segundos
