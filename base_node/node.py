@@ -1311,7 +1311,14 @@ class Node:
         
         # 1. Verificar jefe (si soy subordinado)
         if not self.i_am_boss:
-            if self.my_boss_profile.connection is None or not self.my_boss_profile.connection.is_connected():
+            if self.my_boss_profile.connection is None:
+                # Iniciar proceso de elección
+                logging.warning(f"⚠️ Jefe {self.my_boss_profile.connection.node_id} desconectado")
+                logging.warning("🗳️ Iniciando elecciones para encontrar nuevo jefe...(my_boss_profile is None)")
+
+                threading.Thread(target=self.call_elections, daemon=True).start()
+   
+            elif not self.my_boss_profile.connection.connected:
                 boss_ip = self.my_boss_profile.connection.ip
                 logging.warning(f"⚠️ Jefe {self.my_boss_profile.connection.node_id} desconectado")
                 logging.warning("🗳️ Iniciando elecciones para encontrar nuevo jefe...")
@@ -1323,8 +1330,6 @@ class Node:
                 # Eliminar de known_nodes
                 self.remove_node_from_registry(self.node_type, boss_ip)
                 
-                # Iniciar proceso de elección
-                threading.Thread(target=self.call_elections, daemon=True).start()
         
         # 2. Verificar subordinados (si soy jefe)
         if self.i_am_boss:
@@ -1372,7 +1377,7 @@ class Node:
         
         if self.i_am_boss:
             for node_type, conn in snapshot:
-                if conn and not conn.is_connected():
+                if conn and not conn.connected:
                     boss_ip = conn.ip
                     boss_port = conn.port
                     
