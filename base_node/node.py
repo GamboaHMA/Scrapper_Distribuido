@@ -168,6 +168,9 @@ class Node:
             if self.ssl_cafile:
                 self.ssl_client_context.load_verify_locations(cafile=self.ssl_cafile)
 
+            if self.ssl_certfile and self.ssl_keyfile:
+                self.ssl_client_context.load_cert_chain(certfile=self.ssl_certfile, keyfile=self.ssl_keyfile)
+
             if self.ssl_verify_mode == 'REQUIRED':
                 self.ssl_client_context.verify_mode = ssl.CERT_REQUIRED
             else:
@@ -1243,14 +1246,16 @@ class Node:
             # Conectar
             temp_sock.connect((target_ip, target_port))
 
-            if self.ssl_client_context:
-                try:
-                    temp_sock = self.ssl_client_context.wrap_socket(temp_sock, server_hostname=target_ip, do_handshake_on_connect=True)
-                    logging.info(f"🔐 SSL temporal establecido con {target_ip}:{target_port}, cipher={temp_sock.cipher()}")
-                except ssl.SSLError as e:
-                    logging.error(f"Error de handshake SSL temporal con {target_ip}:{target_port}: {e}")
-                    temp_sock.close()
-                    return None if expect_response else False
+            if not self.ssl_client_context:
+                raise RuntimeError("SSL obligatorio para conexión temporal: no se encontró ssl_client_context")
+
+            try:
+                temp_sock = self.ssl_client_context.wrap_socket(temp_sock, server_hostname=target_ip, do_handshake_on_connect=True)
+                logging.info(f"🔐 SSL temporal establecido con {target_ip}:{target_port}, cipher={temp_sock.cipher()}")
+            except ssl.SSLError as e:
+                logging.error(f"Error de handshake SSL temporal con {target_ip}:{target_port}: {e}")
+                temp_sock.close()
+                return None if expect_response else False
             
             # Serializar y enviar mensaje
             message_bytes = json.dumps(message_dict).encode()
