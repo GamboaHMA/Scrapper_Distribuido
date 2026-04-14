@@ -308,7 +308,9 @@ class RouterNode(Node):
                 port=data.get('port'),
                 on_message_callback=self._handle_message_from_node,
                 sender_node_type=self.node_type,
-                sender_id=self.node_id
+                sender_id=self.node_id,
+                ssl_context=self.ssl_server_context,
+                server_side=True
             )
             if not node_connection.connect(existing_socket=sock):
                 logging.error(f"No se pudo establecer conexión persistente con nodo {sender_id}")
@@ -354,7 +356,9 @@ class RouterNode(Node):
                 port=0,  # Clientes no tienen puerto de escucha
                 on_message_callback=self._handle_message_from_node,  # Usar el mismo callback que subordinados
                 sender_node_type=self.node_type,
-                sender_id=self.node_id
+                sender_id=self.node_id,
+                ssl_context=self.ssl_server_context,
+                server_side=True
             )
             
             # Conectar usando el socket existente
@@ -404,7 +408,9 @@ class RouterNode(Node):
                 port=sender_port,
                 on_message_callback=self._handle_message_from_node,
                 sender_node_type=self.node_type,
-                sender_id=self.node_id
+                sender_id=self.node_id,
+                ssl_context=self.ssl_server_context,
+                server_side=True
             )
             
             # Conectar usando el socket existente
@@ -1289,7 +1295,9 @@ class RouterNode(Node):
                     self.port,
                     on_message_callback=self._handle_message_from_node,
                     sender_node_type=self.node_type,
-                    sender_id=self.node_id
+                    sender_id=self.node_id,
+                    ssl_context=self.ssl_client_context,
+                    server_side=False
                 )
 
                 if not conn.connect():
@@ -1557,7 +1565,9 @@ class RouterNode(Node):
                 new_boss_port,
                 on_message_callback=self._handle_message_from_node,
                 sender_node_type=self.node_type,
-                sender_id=self.node_id
+                sender_id=self.node_id,
+                ssl_context=self.ssl_client_context,
+                server_side=False
             )
             
             if not self.boss_connection.connect():

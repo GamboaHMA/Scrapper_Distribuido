@@ -100,7 +100,11 @@ class NodeConnection:
                     self.socket.settimeout(5)
                     self.socket.connect((self.ip, self.port))
 
-                if self.ssl_context and not isinstance(self.socket, ssl.SSLSocket):
+                if isinstance(self.socket, ssl.SSLSocket):
+                    self.ssl_active = True
+                    self.ssl_cipher = self.socket.cipher()
+                    logging.info(f"🔐 Conexión TLS ya envuelta para {self.node_id} - cipher={self.ssl_cipher}")
+                elif self.ssl_context:
                     self.socket = self.ssl_context.wrap_socket(
                         self.socket,
                         server_side=self.server_side,
@@ -109,10 +113,9 @@ class NodeConnection:
                     self.ssl_active = True
                     self.ssl_cipher = self.socket.cipher()
                     logging.info(f"🔐 Conexión TLS establecida con {self.node_id} - cipher={self.ssl_cipher}")
-                elif isinstance(self.socket, ssl.SSLSocket):
-                    self.ssl_active = True
-                    self.ssl_cipher = self.socket.cipher()
-                    logging.info(f"🔐 Conexión TLS ya envuelta para {self.node_id} - cipher={self.ssl_cipher}")
+                else:
+                    raise RuntimeError(f"SSL obligatorio para {self.node_id}: no hay ssl_context")
+
 
                 self.connected = True
                 self.estado = "conectado"

@@ -12,6 +12,7 @@ Usa el DNS interno de Docker para descubrir servicios.
 """
 
 import socket
+import ssl
 import json
 import sys
 import os
@@ -55,7 +56,28 @@ class InteractiveClient:
         # Tracking de peticiones pendientes
         self.pending_requests = {}  # {task_id: {'url': url, 'timestamp': datetime}}
         self.completed_requests = {}  # {task_id: {'result': result, 'timestamp': datetime}}
+
+        # SSL/TLS context para conexiones seguras
+        self.ssl_context = None
+        self._initialize_ssl_context()
         
+    def _initialize_ssl_context(self):
+        """Inicializa un contexto SSL/TLS para conexiones al router."""
+        try:
+            self.ssl_context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
+            cafile = os.environ.get('SSL_CAFILE')
+            if cafile and os.path.exists(cafile):
+                self.ssl_context.load_verify_locations(cafile=cafile)
+                self.ssl_context.check_hostname = False
+                self.ssl_context.verify_mode = ssl.CERT_NONE
+                self.log(f"SSL context initialized with CA file: {cafile}", "INFO")
+            else:
+                self.ssl_context.check_hostname = False
+                self.ssl_context.verify_mode = ssl.CERT_NONE
+                self.log("SSL context initialized without CA verification", "WARNING")
+        except Exception as e:
+            raise RuntimeError(f"SSL obligatorio: no se pudo inicializar el contexto SSL: {e}")
+
     def log(self, message, level="INFO"):
         """Log con color"""
         colors = {
@@ -131,6 +153,11 @@ class InteractiveClient:
                 # Conectar
                 temp_socket.connect((ip, self.router_port))
                 
+                # Encriptar la conexión siempre
+                if not self.ssl_context:
+                    raise RuntimeError("SSL obligatorio: no hay contexto SSL en el cliente")
+                temp_socket = self.ssl_context.wrap_socket(temp_socket, server_hostname=ip)
+                
                 # Enviar mensaje de identificación temporal
                 identification_msg = {
                     'type': MessageProtocol.MESSAGE_TYPES['IDENTIFICATION'],
@@ -194,6 +221,11 @@ class InteractiveClient:
             sock.connect((self.router_ip, self.router_port))
             self.log(f"✓ Conexión establecida con Router", "SUCCESS")
             
+            # Encriptar la conexión siempre
+            if not self.ssl_context:
+                raise RuntimeError("SSL obligatorio: no hay contexto SSL en el cliente")
+            sock = self.ssl_context.wrap_socket(sock, server_hostname=self.router_ip)
+            
             # Crear NodeConnection con callback para mensajes
             self.router_connection = NodeConnection(
                 node_type='router',
@@ -201,13 +233,13 @@ class InteractiveClient:
                 port=self.router_port,
                 on_message_callback=self._handle_message,
                 sender_node_type='client',
-                sender_id=self.client_id
+                sender_id=self.client_id,
+                ssl_context=self.ssl_context
             )
             
             # Conectar usando el socket existente
             if not self.router_connection.connect(existing_socket=sock):
                 raise Exception("No se pudo establecer NodeConnection")
-            
             self.log(f"✓ NodeConnection establecida con Router", "SUCCESS")
             
             # Enviar mensaje de identificación

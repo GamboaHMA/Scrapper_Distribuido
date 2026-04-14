@@ -150,8 +150,7 @@ class Node:
     def _initialize_ssl_contexts(self):
         """Inicializa los contextos SSL/TLS para cliente y servidor."""
         if not self.ssl_certfile or not self.ssl_keyfile:
-            logging.warning("SSL no configurado: falta SSL_CERTFILE o SSL_KEYFILE. Usando sockets sin cifrar.")
-            return
+            raise RuntimeError("SSL obligatorio: configure SSL_CERTFILE y SSL_KEYFILE")
 
         try:
             self.ssl_server_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
@@ -817,21 +816,7 @@ class Node:
             sock.settimeout(5)
             sock.connect((boss_ip, boss_port))
             
-            # Enviar IDENTIFICATION como subordinado
-            identification = self._create_message(
-                MessageProtocol.MESSAGE_TYPES['IDENTIFICATION'],
-                {
-                    'node_port': self.port,
-                    'is_boss': self.i_am_boss,  # Ahora soy subordinado
-                    'is_temporary': False  # Conexión persistente
-                }
-            )
-            
-            msg_bytes = json.dumps(identification).encode()
-            sock.sendall(len(msg_bytes).to_bytes(2, 'big'))
-            sock.sendall(msg_bytes)
-            
-            # Crear NodeConnection
+            # Crear NodeConnection y envolver el socket en TLS antes de enviar datos
             boss_conn = NodeConnection(
                 node_type=self.node_type,
                 ip=boss_ip,
@@ -843,8 +828,18 @@ class Node:
                 server_side=False
             )
             
-            # Conectar usando el socket existente
             if boss_conn.connect(existing_socket=sock):
+                # Enviar IDENTIFICATION como subordinado solo después de TLS
+                identification = self._create_message(
+                    MessageProtocol.MESSAGE_TYPES['IDENTIFICATION'],
+                    {
+                        'node_port': self.port,
+                        'is_boss': self.i_am_boss,  # Ahora soy subordinado
+                        'is_temporary': False  # Conexión persistente
+                    }
+                )
+                boss_conn.send_message(identification)
+                
                 # Actualizar mi perfil de jefe
                 with self.my_boss_profile.lock:
                     self.my_boss_profile.set_connection(boss_conn)
