@@ -875,8 +875,8 @@ class Node:
         
         try:
             response_bytes = json.dumps(response).encode()
-            sock.send(len(response_bytes).to_bytes(2, 'big'))
-            sock.send(response_bytes)
+            sock.sendall(len(response_bytes).to_bytes(2, 'big'))
+            sock.sendall(response_bytes)
             logging.info(f"Respuesta de elección enviada a {requester_ip}")
         except Exception as e:
             logging.error(f"Error respondiendo elección a {requester_ip}: {e}")

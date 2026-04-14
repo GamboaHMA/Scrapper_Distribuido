@@ -249,7 +249,7 @@ class RouterNode(Node):
         
         # Dos casos: ya tengo jefe de este node_type o no tengo jefe de este node_type
         if node_type in self.external_bosses:
-            logging.info(f"Ya tengo jefe de tipo {node_type}, enviando información sobre el jefe existente a {sender_ip}")
+            logging.info(f"Ya tengo jefe de tipo {node_type}, enviando información sobre el jefe existente a {client_ip}")
             # Enviar información sobre el jefe existente al nodo que intenta reunificarse
             existing_boss_connection = self.external_bosses[node_type].get_connection()
             if existing_boss_connection:
@@ -298,10 +298,10 @@ class RouterNode(Node):
                 logging.info(f"Notificación enviada al nodo {sender_id} aceptando como jefe de tipo {node_type}")
             except Exception as e:
                 logging.error(f"Error enviando notificación al nodo {sender_id}: {e}")
-            finally:
                 sock.close()
-                
-            # Crear node_connection con el nodo
+                return
+
+            # Crear node_connection con el nodo (reutilizar el socket ya envuelto en TLS)
             node_connection = NodeConnection(
                 node_type=node_type,
                 ip=data.get('ip'),
@@ -1463,7 +1463,19 @@ class RouterNode(Node):
             self.boss_connection = None
             return
 
-        self.my_boss_profile.set_connection(conn) 
+        # Enviar IDENTIFICATION al nuevo jefe: sin esto el servidor recibe la conexión TLS
+        # pero espera el primer mensaje y cae en timeout (WARNING "Timeout esperando mensaje").
+        conn.send_message(self._create_message(
+            MessageProtocol.MESSAGE_TYPES['IDENTIFICATION'],
+            {
+                'ip': self.ip,
+                'port': self.port,
+                'is_boss': False,
+                'is_temporary': False
+            }
+        ))
+
+        self.my_boss_profile.set_connection(conn)
         logging.info(f"✓ Nuevo jefe {new_boss_ip} confirmado - conectandome a el con node_connection")
         logging.info(f"🎉 Reunificación completada - Ahora soy subordinado de {new_boss_ip}")
                
