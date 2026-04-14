@@ -15,6 +15,7 @@ import os
 import threading
 import uuid
 import time
+import ssl
 from datetime import datetime
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import parse_qs, urlparse
@@ -62,9 +63,35 @@ class WebScrapperClient:
         self.completed_db_responses = {}  # {request_id: response_data}
         self.requests_lock = threading.Lock()
         
+        # SSL context for encrypted connections
+        self.ssl_context = None
+        self._initialize_ssl_context()
+        
         # Thread de reconexión
         self.reconnect_thread = None
         
+    def _initialize_ssl_context(self):
+        """Initialize SSL context for client connections"""
+        try:
+            self.ssl_context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
+            
+            # Load CA certificate for server verification
+            cafile = os.environ.get('SSL_CAFILE')
+            if cafile and os.path.exists(cafile):
+                self.ssl_context.load_verify_locations(cafile=cafile)
+                self.ssl_context.check_hostname = False  # Disable for self-signed certs
+                self.ssl_context.verify_mode = ssl.CERT_NONE  # Accept self-signed
+                logging.info(f"SSL context initialized with CA file: {cafile}")
+            else:
+                # Fallback: no verification
+                self.ssl_context.check_hostname = False
+                self.ssl_context.verify_mode = ssl.CERT_NONE
+                logging.warning("SSL context initialized without CA verification")
+                
+        except Exception as e:
+            logging.error(f"Failed to initialize SSL context: {e}")
+            self.ssl_context = None
+    
     def resolve_router(self):
         """Resuelve IPs de routers y encuentra el jefe"""
         try:
@@ -105,6 +132,11 @@ class WebScrapperClient:
                 temp_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 temp_socket.settimeout(3)
                 temp_socket.connect((ip, self.router_port))
+                
+                # Wrap socket with SSL if context available
+                if self.ssl_context:
+                    temp_socket = self.ssl_context.wrap_socket(temp_socket, server_hostname=ip)
+                    logging.debug(f"SSL wrapped temporary socket to {ip}")
                 
                 identification_msg = {
                     'type': MessageProtocol.MESSAGE_TYPES['IDENTIFICATION'],
@@ -157,13 +189,19 @@ class WebScrapperClient:
                 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 sock.connect((self.router_ip, self.router_port))
                 
+                # Wrap socket with SSL if context available
+                if self.ssl_context:
+                    sock = self.ssl_context.wrap_socket(sock, server_hostname=self.router_ip)
+                    logging.debug(f"SSL wrapped connection socket to {self.router_ip}")
+                
                 self.router_connection = NodeConnection(
                     node_type='router',
                     ip=self.router_ip,
                     port=self.router_port,
                     on_message_callback=self._handle_message,
                     sender_node_type='client',
-                    sender_id=self.client_id
+                    sender_id=self.client_id,
+                    ssl_context=self.ssl_context  # Pass SSL context
                 )
                 
                 self.router_connection.connect(existing_socket=sock)

@@ -1876,6 +1876,11 @@ class DatabaseNode(Node):
             try:
                 sock.connect((router_ip, router_port))
                 
+                # Wrap socket with SSL if context available
+                if hasattr(self, 'ssl_contexts') and self.ssl_contexts and 'client' in self.ssl_contexts:
+                    sock = self.ssl_contexts['client'].wrap_socket(sock, server_hostname=router_ip)
+                    logging.debug(f"SSL wrapped temporary socket to router {router_ip}")
+                
                 # Enviar longitud del mensaje (2 bytes como espera el Router)
                 message_bytes = message.encode('utf-8')
                 message_length = len(message_bytes)

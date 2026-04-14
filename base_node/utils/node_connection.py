@@ -4,6 +4,7 @@ import threading
 import queue
 import logging
 import time
+import ssl
 from datetime import datetime
 from .message_protocol import MessageProtocol
 
@@ -14,7 +15,7 @@ class NodeConnection:
     Maneja tanto el envío como la recepción de mensajes de forma asíncrona.
     """
     
-    def __init__(self, node_type, ip, port, on_message_callback=None, sender_node_type=None, sender_id=None):
+    def __init__(self, node_type, ip, port, on_message_callback=None, sender_node_type=None, sender_id=None, ssl_context=None, server_side=False):
         """
         Inicializa una conexión con un nodo.
         
@@ -26,6 +27,8 @@ class NodeConnection:
                                                       Debe aceptar (node_connection, message_dict)
             sender_node_type (str, optional): Tipo del nodo LOCAL que envía mensajes
             sender_id (str, optional): ID del nodo LOCAL que envía mensajes
+            ssl_context (ssl.SSLContext, optional): Contexto TLS para esta conexión
+            server_side (bool, optional): Si la conexión debe actuar como servidor TLS
         """
         self.node_type = node_type  # Tipo del nodo remoto
         self.ip = ip
@@ -55,6 +58,11 @@ class NodeConnection:
         self.heartbeat_monitor_stop_event = threading.Event()
         self.heartbeat_thread_stop_event = threading.Event()
         
+        self.ssl_context = ssl_context
+        self.server_side = server_side
+        self.ssl_active = False
+        self.ssl_cipher = None
+
         # Estado del nodo
         self.last_heartbeat = datetime.now()  # Inicializar con tiempo actual para dar gracia inicial
         self.is_busy = False
@@ -91,7 +99,21 @@ class NodeConnection:
                     self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                     self.socket.settimeout(5)
                     self.socket.connect((self.ip, self.port))
-                
+
+                if self.ssl_context and not isinstance(self.socket, ssl.SSLSocket):
+                    self.socket = self.ssl_context.wrap_socket(
+                        self.socket,
+                        server_side=self.server_side,
+                        do_handshake_on_connect=True
+                    )
+                    self.ssl_active = True
+                    self.ssl_cipher = self.socket.cipher()
+                    logging.info(f"🔐 Conexión TLS establecida con {self.node_id} - cipher={self.ssl_cipher}")
+                elif isinstance(self.socket, ssl.SSLSocket):
+                    self.ssl_active = True
+                    self.ssl_cipher = self.socket.cipher()
+                    logging.info(f"🔐 Conexión TLS ya envuelta para {self.node_id} - cipher={self.ssl_cipher}")
+
                 self.connected = True
                 self.estado = "conectado"
                 
@@ -188,6 +210,10 @@ class NodeConnection:
                 try:
                     # Enviar longitud del mensaje (2 bytes)
                     length = len(message_bytes)
+                    if self.ssl_active:
+                        logging.debug(f"Enviando mensaje cifrado a {self.node_id} usando cipher={self.ssl_cipher}, longitud={length}")
+                    else:
+                        logging.debug(f"Enviando mensaje sin TLS a {self.node_id}, longitud={length}")
                     self.socket.send(length.to_bytes(2, 'big'))
                     
                     # Enviar mensaje completo

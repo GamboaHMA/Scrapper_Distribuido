@@ -1,5 +1,6 @@
 from operator import ne
 import socket
+import ssl
 import json
 import time
 import threading
@@ -73,6 +74,14 @@ class Node:
         self.subordinates_lock = threading.Lock()
 
         self.running = True
+
+        self.ssl_certfile = os.environ.get('SSL_CERTFILE')
+        self.ssl_keyfile = os.environ.get('SSL_KEYFILE')
+        self.ssl_cafile = os.environ.get('SSL_CAFILE')
+        self.ssl_verify_mode = os.environ.get('SSL_VERIFY_MODE', 'NONE').upper()
+        self.ssl_client_context = None
+        self.ssl_server_context = None
+        self._initialize_ssl_contexts()
         
         # Cache de IPs conocidas (nodos descubiertos o identificados)
         # Útil para elecciones futuras aunque no estén conectados
@@ -134,6 +143,39 @@ class Node:
             self.my_boss_profile.clear_connection()
         else:
             self.my_boss_profile.set_connection(value)
+
+    def _initialize_ssl_contexts(self):
+        """Inicializa los contextos SSL/TLS para cliente y servidor."""
+        if not self.ssl_certfile or not self.ssl_keyfile:
+            logging.warning("SSL no configurado: falta SSL_CERTFILE o SSL_KEYFILE. Usando sockets sin cifrar.")
+            return
+
+        try:
+            self.ssl_server_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            self.ssl_server_context.load_cert_chain(certfile=self.ssl_certfile, keyfile=self.ssl_keyfile)
+            if self.ssl_cafile:
+                self.ssl_server_context.load_verify_locations(cafile=self.ssl_cafile)
+
+            if self.ssl_verify_mode == 'REQUIRED':
+                self.ssl_server_context.verify_mode = ssl.CERT_REQUIRED
+            else:
+                self.ssl_server_context.verify_mode = ssl.CERT_NONE
+
+            self.ssl_client_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+            self.ssl_client_context.check_hostname = False
+            if self.ssl_cafile:
+                self.ssl_client_context.load_verify_locations(cafile=self.ssl_cafile)
+
+            if self.ssl_verify_mode == 'REQUIRED':
+                self.ssl_client_context.verify_mode = ssl.CERT_REQUIRED
+            else:
+                self.ssl_client_context.verify_mode = ssl.CERT_NONE
+
+            logging.info(f"SSL habilitado: certfile={self.ssl_certfile}, verify_mode={self.ssl_verify_mode}")
+        except Exception as e:
+            logging.error(f"No se pudo inicializar SSL: {e}")
+            self.ssl_client_context = None
+            self.ssl_server_context = None
 
     def _create_message(self, msg_type, data=None):
         """
@@ -445,7 +487,9 @@ class Node:
                     new_boss_port,
                     on_message_callback=self._handle_message_from_node,
                     sender_node_type=self.node_type,
-                    sender_id=self.node_id
+                    sender_id=self.node_id,
+                    ssl_context=self.ssl_client_context,
+                    server_side=False
                 )
                 if conn.connect():
                     self.bosses_connections[new_boss_node_type] = conn
@@ -525,7 +569,9 @@ class Node:
                 boss_port,
                 on_message_callback=self._handle_message_from_node,
                 sender_node_type=self.node_type,
-                sender_id=self.node_id
+                sender_id=self.node_id,
+                ssl_context=self.ssl_client_context,
+                server_side=False
             )
             
             if conn.connect():
@@ -684,7 +730,9 @@ class Node:
                         data.get('node_port', self.port),
                         on_message_callback=self._handle_message_from_node,
                         sender_node_type=self.node_type,
-                        sender_id=self.node_id
+                        sender_id=self.node_id,
+                        ssl_context=self.ssl_server_context,
+                        server_side=True
                     )
                     if conn.connect(existing_socket=sock):
                         with self.my_boss_profile.lock:
@@ -784,7 +832,9 @@ class Node:
                 port=boss_port,
                 on_message_callback=self._handle_message_from_node,
                 sender_node_type=self.node_type,
-                sender_id=self.node_id
+                sender_id=self.node_id,
+                ssl_context=self.ssl_client_context,
+                server_side=False
             )
             
             # Conectar usando el socket existente
@@ -893,7 +943,9 @@ class Node:
             self.port,
             on_message_callback=self._handle_message_from_node,
             sender_node_type=self.node_type,
-            sender_id=self.node_id
+            sender_id=self.node_id,
+            ssl_context=self.ssl_client_context,
+            server_side=False
         )
         
         if new_connection.connect():
@@ -985,7 +1037,9 @@ class Node:
             self.port,
             on_message_callback=self._handle_message_from_node,
             sender_node_type=self.node_type,
-            sender_id=self.node_id
+            sender_id=self.node_id,
+            ssl_context=self.ssl_server_context,
+            server_side=True
         )
         
         if conn.connect(existing_socket=existing_socket):
@@ -1095,7 +1149,9 @@ class Node:
                 client_port,  # Puerto correcto del cliente
                 on_message_callback=self._handle_message_from_node,
                 sender_node_type=self.node_type,  # Mi tipo
-                sender_id=self.node_id  # Mi ID
+                sender_id=self.node_id,  # Mi ID
+                ssl_context=self.ssl_server_context,
+                server_side=True
             )
             
             if conn.connect(existing_socket=existing_socket):
@@ -1179,6 +1235,15 @@ class Node:
             
             # Conectar
             temp_sock.connect((target_ip, target_port))
+
+            if self.ssl_client_context:
+                try:
+                    temp_sock = self.ssl_client_context.wrap_socket(temp_sock, server_hostname=target_ip, do_handshake_on_connect=True)
+                    logging.info(f"🔐 SSL temporal establecido con {target_ip}:{target_port}, cipher={temp_sock.cipher()}")
+                except ssl.SSLError as e:
+                    logging.error(f"Error de handshake SSL temporal con {target_ip}:{target_port}: {e}")
+                    temp_sock.close()
+                    return None if expect_response else False
             
             # Serializar y enviar mensaje
             message_bytes = json.dumps(message_dict).encode()
@@ -1584,6 +1649,15 @@ class Node:
         client_ip = addr[0]
         
         try:
+            if self.ssl_server_context:
+                try:
+                    sock = self.ssl_server_context.wrap_socket(sock, server_side=True, do_handshake_on_connect=True)
+                    logging.info(f"🔐 SSL entrante desde {client_ip}, cipher={sock.cipher()}")
+                except ssl.SSLError as e:
+                    logging.error(f"Error de handshake SSL entrante desde {client_ip}: {e}")
+                    sock.close()
+                    return
+
             # Recibir mensaje de identificación
             sock.settimeout(5.0)
             
@@ -2023,7 +2097,9 @@ class Node:
                         self.external_bosses_cache['bd']['port'],
                         on_message_callback=self._handle_message_from_node,
                         sender_node_type=self.node_type,
-                        sender_id=self.node_id
+                        sender_id=self.node_id,
+                        ssl_context=self.ssl_client_context,
+                        server_side=False
                     )
 
                     if conn.connect():
