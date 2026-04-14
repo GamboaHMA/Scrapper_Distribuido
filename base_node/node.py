@@ -1428,9 +1428,23 @@ class Node:
                     for node_id, conn in list(self.subordinates.items()):
                         is_conn = conn.is_connected()
                         time_since = conn.get_time_since_last_heartbeat()
-                        logging.debug(f"   - {node_id}: connected={is_conn}, último heartbeat hace {time_since:.1f}s")
+                        logging.debug(
+                            f"   - {node_id}: connected={is_conn}, "
+                            f"último heartbeat hace {time_since:.1f}s, "
+                            f"heartbeat_timeout={conn.heartbeat_timeout}s"
+                        )
                         if not is_conn:
-                            logging.warning(f"⚠️ Subordinado {node_id} desconectado (último heartbeat hace {time_since:.1f}s)")
+                            if time_since is not None and time_since <= conn.heartbeat_timeout:
+                                logging.warning(
+                                    f"⚠️ Subordinado {node_id} reporta conexión false pero "
+                                    f"último heartbeat hace {time_since:.1f}s < timeout ({conn.heartbeat_timeout}s); "
+                                    f"dejo en espera antes de desconectarlo"
+                                )
+                                continue
+                            logging.warning(
+                                f"⚠️ Subordinado {node_id} desconectado (estado de conexión false, "
+                                f"último heartbeat hace {time_since:.1f}s)"
+                            )
                             dead_nodes.append(node_id)
                     
                     # Eliminar subordinados muertos
