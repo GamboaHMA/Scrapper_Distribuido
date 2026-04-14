@@ -8,6 +8,10 @@ DATABASE_NODE_IMAGE = db_node
 CLIENT_IMAGE = client
 WEB_CLIENT_IMAGE = web_client
 
+# SSL Configuration
+SSL_VOLUME = -v $(CURDIR)/certs:/app/certs
+SSL_ENV = -e SSL_CERTFILE=/app/certs/server.crt -e SSL_KEYFILE=/app/certs/server.key -e SSL_CAFILE=/app/certs/server.crt -e SSL_VERIFY_MODE=NONE
+
 # Colores
 GREEN = \033[0;32m
 YELLOW = \033[1;33m
@@ -114,6 +118,8 @@ run-scrapper: network ## Ejecutar 1 ScrapperNode
 		--network $(NETWORK_NAME) \
 		--network-alias scrapper \
 		-e LOG_LEVEL=DEBUG \
+		$(SSL_VOLUME) \
+		$(SSL_ENV) \
 		-v $(CURDIR)/base_node:/app/base_node \
 		-v $(CURDIR)/scrapper:/app/scrapper \
 		$(SCRAPPER_NODE_IMAGE); \
@@ -126,6 +132,8 @@ run-scrappers: network ## Ejecutar 2 ScrapperNodes (por defecto)
 			--network $(NETWORK_NAME) \
 			--network-alias scrapper \
 			-e LOG_LEVEL=DEBUG \
+			$(SSL_VOLUME) \
+			$(SSL_ENV) \
 			-v $(CURDIR)/base_node:/app/base_node \
 			-v $(CURDIR)/scrapper:/app/scrapper \
 			$(SCRAPPER_NODE_IMAGE); \
@@ -141,6 +149,8 @@ run-router: network ## Ejecutar 1 RouterNode
 		--network $(NETWORK_NAME) \
 		--network-alias router \
 		-e LOG_LEVEL=DEBUG \
+		$(SSL_VOLUME) \
+		$(SSL_ENV) \
 		-v $(CURDIR)/base_node:/app/base_node \
 		-v $(CURDIR)/router:/app/router \
 		$(ROUTER_NODE_IMAGE); \
@@ -153,6 +163,8 @@ run-routers: network ## Ejecutar 2 RouterNodes (por defecto)
 			--network $(NETWORK_NAME) \
 			--network-alias router \
 			-e LOG_LEVEL=DEBUG \
+			$(SSL_VOLUME) \
+			$(SSL_ENV) \
 			-v $(CURDIR)/base_node:/app/base_node \
 			-v $(CURDIR)/router:/app/router \
 			$(ROUTER_NODE_IMAGE); \
@@ -168,6 +180,8 @@ run-database: network ## Ejecutar 1 DatabaseNode
 		--network $(NETWORK_NAME) \
 		--network-alias bd \
 		-e LOG_LEVEL=DEBUG \
+		$(SSL_VOLUME) \
+		$(SSL_ENV) \
 		-v $(CURDIR)/base_node:/app/base_node \
 		-v $(CURDIR)/database:/app/database \
 		$(DATABASE_NODE_IMAGE); \
@@ -180,6 +194,8 @@ run-databases: network ## Ejecutar 2 DatabaseNodes (por defecto)
 			--network $(NETWORK_NAME) \
 			--network-alias bd \
 			-e LOG_LEVEL=DEBUG \
+			$(SSL_VOLUME) \
+			$(SSL_ENV) \
 			-v $(CURDIR)/base_node:/app/base_node \
 			-v $(CURDIR)/database:/app/database \
 			$(DATABASE_NODE_IMAGE); \
@@ -192,6 +208,8 @@ run-client: network ## Ejecutar 1 Cliente interactivo
 		--network $(NETWORK_NAME) \
 		--entrypoint /bin/bash \
 		-e LOG_LEVEL=DEBUG \
+		$(SSL_VOLUME) \
+		$(SSL_ENV) \
 		-v $(CURDIR)/base_node:/app/base_node \
 		-v $(CURDIR)/client:/app/client \
 		$(CLIENT_IMAGE) -c "tail -f /dev/null"
@@ -220,6 +238,8 @@ run-web-client: network ## Ejecutar Cliente Web (accesible en http://localhost:8
 		-e ROUTER_PORT=7070 \
 		-e WEB_PORT=8080 \
 		-e LOG_LEVEL=DEBUG \
+		$(SSL_VOLUME) \
+		$(SSL_ENV) \
 		-v $(CURDIR)/base_node:/app/base_node \
 		-v $(CURDIR)/web_client:/app/web_client \
 		$(WEB_CLIENT_IMAGE)

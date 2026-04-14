@@ -241,7 +241,7 @@ class RouterNode(Node):
         logging.info(f"Boss no router reunification message received from {client_ip}: {message}")
         
         data = message.get('data', {})
-        sender_ip = message.get('ip', 'unknown')
+        sender_id = message.get('ip', 'unknown')
         sender_port = message.get('port', 'unknown')
         sender_node_type = message.get('node_type', 'unknown')
         data = message.get('data', {})
@@ -937,7 +937,9 @@ class RouterNode(Node):
             boss_profile.port,
             on_message_callback=self._handle_message_from_node,
             sender_node_type=self.node_type,
-            sender_id=self.node_id
+            sender_id=self.node_id,
+            ssl_context=self.ssl_client_context,
+            server_side=False
         )
         
         if new_connection.connect():

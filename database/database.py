@@ -2234,7 +2234,9 @@ class DatabaseNode(Node):
                 port=boss_profile.port,
                 on_message_callback=self._handle_message_from_node,
                 sender_node_type=self.node_type,
-                sender_id=self.node_id
+                sender_id=self.node_id,
+                ssl_context=self.ssl_client_context,
+                server_side=False
             )
             
             # Conectar
