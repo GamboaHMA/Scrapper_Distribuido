@@ -1250,10 +1250,10 @@ class Node:
                 raise RuntimeError("SSL obligatorio para conexión temporal: no se encontró ssl_client_context")
 
             try:
-                temp_sock = self.ssl_client_context.wrap_socket(temp_sock, server_hostname=target_ip, do_handshake_on_connect=True)
-                logging.info(f"🔐 SSL temporal establecido con {target_ip}:{target_port}, cipher={temp_sock.cipher()}")
+                temp_sock = self.ssl_client_context.wrap_socket(temp_sock, server_hostname=target_ip, do_handshake_on_connect=False)
+                logging.debug(f"🔐 SSL temporal wrapping completado con {target_ip}:{target_port}")
             except ssl.SSLError as e:
-                logging.error(f"Error de handshake SSL temporal con {target_ip}:{target_port}: {e}")
+                logging.error(f"Error envolviendo socket SSL temporal con {target_ip}:{target_port}: {e}")
                 temp_sock.close()
                 return None if expect_response else False
             
@@ -1686,10 +1686,10 @@ class Node:
         try:
             if self.ssl_server_context:
                 try:
-                    sock = self.ssl_server_context.wrap_socket(sock, server_side=True, do_handshake_on_connect=True)
-                    logging.info(f"🔐 SSL entrante desde {client_ip}, cipher={sock.cipher()}")
+                    sock = self.ssl_server_context.wrap_socket(sock, server_side=True, do_handshake_on_connect=False)
+                    logging.debug(f"🔐 SSL wrapping iniciado para {client_ip} (handshake lazy)")
                 except ssl.SSLError as e:
-                    logging.error(f"Error de handshake SSL entrante desde {client_ip}: {e}")
+                    logging.error(f"Error envolviendo socket SSL entrante de {client_ip}: {e}")
                     sock.close()
                     return
 
