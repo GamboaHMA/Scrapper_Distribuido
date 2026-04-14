@@ -107,6 +107,9 @@ class Node:
         self.connection_monitor_thread = None
         self.connection_monitor_stop_event = threading.Event()
         self.connection_check_interval = 10  # Verificar cada 10 segundos
+        # Prevents concurrent elections: set when an election is running,
+        # cleared only once a boss connection is established or self-proclamation completes.
+        self.election_in_progress = threading.Event()
         
         # # Hilo de monitoreo de heartbeats
         # self.heartbeat_monitor_thread = None
@@ -621,7 +624,10 @@ class Node:
         self.nodes_cache[sender_node_type][client_ip] = {
             "port": data.get('node_port', self.port),
             "last_seen": datetime.now(),
-            "is_boss": is_boss
+            "is_boss": is_boss,
+            # Temporary visitors (web clients, scrapers querying the boss) are NOT election participants.
+            # call_elections filters these out to avoid wasting timeout budget on them.
+            "temporary": is_temporary
         }
         
         logging.debug(f"Nodo {sender_node_type} {client_ip} registrado (boss={is_boss}, temporary={is_temporary})")
@@ -905,13 +911,16 @@ class Node:
                 conn.disconnect()
             self.subordinates.clear()
         
-        # Desconectar del jefe anterior si existía
-        if self.my_boss_profile.connection:
-            old_boss_ip = self.my_boss_profile.connection.ip
-            if old_boss_ip != new_boss_ip:
-                logging.info(f"Desconectando del jefe anterior {old_boss_ip}")
-                self.my_boss_profile.connection.disconnect()
-                self.my_boss_profile.clear_connection()
+        # Desconectar del jefe anterior si existía.
+        # Proteger con lock: clear_connection no es thread-safe por sí solo y
+        # _cleanup_dead_nodes puede leer my_boss_profile.connection concurrentemente.
+        with self.my_boss_profile.lock:
+            if self.my_boss_profile.connection:
+                old_boss_ip = self.my_boss_profile.connection.ip
+                if old_boss_ip != new_boss_ip:
+                    logging.info(f"Desconectando del jefe anterior {old_boss_ip}")
+                    self.my_boss_profile.connection.disconnect()
+                    self.my_boss_profile.clear_connection()
         
         # Actualizar known_nodes
         if self.node_type not in self.nodes_cache:
@@ -933,10 +942,13 @@ class Node:
         
     def connect_to_boss(self, boss_ip):
         """Conectar a mi jefe (cuando soy subordinado)"""
-        if self.my_boss_profile.is_connected():
-            logging.warning("Ya existe una conexión con el jefe")
-            return True
-        
+        # Check + early return under lock to avoid racing with _cleanup_dead_nodes
+        with self.my_boss_profile.lock:
+            if self.my_boss_profile.is_connected():
+                logging.warning("Ya existe una conexión con el jefe")
+                self.election_in_progress.clear()
+                return True
+
         new_connection = NodeConnection(
             self.node_type, 
             boss_ip, 
@@ -964,20 +976,20 @@ class Node:
                 )
             )
             
-            # Establecer conexión en el perfil
-            self.my_boss_profile.set_connection(new_connection)
-            
-            # Iniciar envío periódico de heartbeats
-            # threading.Thread(
-            #     target=self._heartbeat_loop,
-            #     args=(new_connection,),
-            #     daemon=True
-            # ).start()
-            
+            # Establecer conexión en el perfil (bajo lock: not thread-safe por sí solo)
+            with self.my_boss_profile.lock:
+                self.my_boss_profile.set_connection(new_connection)
+
+            # Elección resuelta: hay jefe conectado
+            self.election_in_progress.clear()
+
             return True
         else:
             logging.error(f"No se pudo conectar al jefe en {boss_ip}")
-            self.my_boss_profile.clear_connection()
+            with self.my_boss_profile.lock:
+                self.my_boss_profile.clear_connection()
+            # Liberar flag para que el monitor pueda reintentar en el siguiente ciclo
+            self.election_in_progress.clear()
             # Eliminar de known_nodes si no se pudo conectar
             self.remove_node_from_registry(self.node_type, boss_ip)
             return False
@@ -1377,15 +1389,24 @@ class Node:
         # 1. Verificar jefe (si soy subordinado)
         if not self.i_am_boss:
             if self.my_boss_profile.connection is None or not self.my_boss_profile.connection.connected:
-                # Iniciar proceso de elección
-                logging.warning(f"⚠️ Jefe desconectado")
-                logging.warning("🗳️ Iniciando elecciones para encontrar nuevo jefe...(my_boss_profile is None)")
-                if self.my_boss_profile.connection:
-                    # Desconectar del jefe muerto
-                    self.my_boss_profile.connection.disconnect()
-                    self.my_boss_profile.clear_connection()
-
-                threading.Thread(target=self.call_elections, daemon=True).start()
+                if self.election_in_progress.is_set():
+                    # An election is already running; don't spawn a second concurrent one.
+                    logging.debug("🗳️ Elección ya en progreso, omitiendo inicio de nueva elección")
+                else:
+                    # Iniciar proceso de elección
+                    logging.warning(f"⚠️ Jefe desconectado")
+                    logging.warning("🗳️ Iniciando elecciones para encontrar nuevo jefe...(my_boss_profile is None)")
+                    if self.my_boss_profile.connection:
+                        # Desconectar del jefe muerto
+                        self.my_boss_profile.connection.disconnect()
+                        self.my_boss_profile.clear_connection()
+                    self.election_in_progress.set()
+                    threading.Thread(target=self.call_elections, daemon=True).start()
+            else:
+                # Boss is alive — clear any stale election flag (race: election resolved externally)
+                if self.election_in_progress.is_set():
+                    logging.debug("👍 Jefe conectado, limpiando flag de elección en progreso")
+                    self.election_in_progress.clear()
 
 
 
@@ -1827,9 +1848,13 @@ class Node:
             self._become_boss()
             return
         
-        # Filtrar nodos con IP mayor que la mía (comparación numérica)
+        # Filtrar nodos con IP mayor que la mía (comparación numérica).
+        # Excluir visitantes temporales (clientes web, scrappers consultando al jefe)
+        # que no son nodos de elección y solo alargarían el proceso con timeouts.
         higher_ip_nodes = []
         for ip, info in known_nodes_of_my_type.items():
+            if info.get("temporary", False):
+                continue  # No es candidato a jefe
             if compare_ips(ip, self.ip) > 0:
                 higher_ip_nodes.append((ip, info["port"]))
         
@@ -1870,7 +1895,16 @@ class Node:
         if someone_responded:
             logging.info("Hay un nodo con IP mayor vivo. NO soy jefe.")
             self.i_am_boss = False
-            # Esperar a que el nuevo jefe haga broadcast de identificación
+            # Esperar a que el nuevo jefe haga broadcast de identificación.
+            # Si el anuncio nunca llega (el jefe electo cae antes de anunciarse),
+            # liberar el flag tras 30 s para que el monitor pueda reintentar.
+            def _election_flag_timeout():
+                if self.election_in_progress.is_set():
+                    logging.warning("⏰ Timeout esperando anuncio de nuevo jefe: liberando flag de elección")
+                    self.election_in_progress.clear()
+            _t = threading.Timer(30.0, _election_flag_timeout)
+            _t.daemon = True
+            _t.start()
         else:
             logging.info("Nadie con IP mayor respondió. ME AUTOPROCLAMO JEFE.")
             self._become_boss()
@@ -1997,7 +2031,11 @@ class Node:
                 logging.info(f"  ✓ {ip} eliminado del nodes_cache")
         
         logging.info(f"=== JEFATURA ESTABLECIDA: {connected_count}/{len(all_known_ips)} subordinados conectados ===")
-        
+
+        # Jefatura completamente establecida: liberar el flag para que el monitor
+        # no piense que hay una elección pendiente.
+        self.election_in_progress.clear()
+
         # Iniciar tareas de jefe (si aplica)
         self.start_boss_tasks() # thread?
 
